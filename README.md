@@ -1,35 +1,33 @@
-# AI Boardroom v2
+# AI Boardroom v2.1
 
-Multi-agent corporate simulation with **JARVIS** as Chief of Staff.
+Multi-agent boardroom with **streaming chat**, multi-provider LLMs, and **Grok Voice Agent**.
 
-**Primary LLM stack: [NVIDIA NIM](https://build.nvidia.com)** (`https://integrate.api.nvidia.com/v1`)  
-**Fallback:** OpenRouter free models · optional OpenAI / Claude / Gemini / Grok keys
-
-## Features
-- 9 board members with **per-role model assignment**
-- Settings UI for all provider API keys (stored in browser localStorage)
-- Interactive chat composer with **waveform** (Gemini/Grok-style)
-- Voice: **Gemini Live**, **ChatGPT Realtime**, **Grok Voice**
-- Vault notepad, mind map (search/filter), implementation canvas
-- Demo mode when no keys are set
+## Highlights
+- **Streaming** SSE chat with stop / regenerate / copy
+- **NVIDIA NIM** primary · OpenRouter free fallback · OpenAI / Claude / Gemini / xAI
+- Per-board-member model assignment
+- Grok Voice Agent (ephemeral tokens, tools, MCP config)
+- Setup checklist · local-only attach · vault · mind map · canvas
+- Agent activity monitor (real in-process task log)
+- Security headers, write jails, scrubbed code-exec env
 
 ## Quick start
 ```bash
 npm install
-cp .env.example .env   # optional server-side keys
+cp .env.example .env   # optional
 npm start              # http://localhost:8080
 ```
 
-Open **Settings** (gear) → paste **NVIDIA_API_KEY** → Save → chat.
+Open **Settings** → paste **NVIDIA** (and/or **xAI**) keys → Save → chat.
 
-## Env (optional server defaults)
+## Optional env
 | Key | Purpose |
 |-----|---------|
 | `NVIDIA_API_KEY` | Primary NIM models |
+| `XAI_API_KEY` | Grok text + Voice Agent |
 | `OPENROUTER_API_KEY` | Free-model fallback |
-| `OPENAI_API_KEY` | GPT + ChatGPT voice |
-| `ANTHROPIC_API_KEY` | Claude |
-| `GEMINI_API_KEY` | Gemini + Live voice |
-| `XAI_API_KEY` | Grok + Grok voice |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | Extra providers |
+| `BOARDROOM_API_KEY` | Locks tools/execution when set |
+| `ALLOWED_ORIGINS` | CORS allowlist |
 
-Client keys in Settings override empty server keys for that browser session.
+Browser keys in Settings override empty server keys for that session.

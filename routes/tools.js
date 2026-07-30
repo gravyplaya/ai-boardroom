@@ -12,6 +12,12 @@ import { promisify } from 'util';
 const router = Router();
 const execFileAsync = promisify(execFile);
 const BASE_WORKSPACE = path.resolve(process.cwd());
+const WRITE_ROOTS = [
+  path.resolve(BASE_WORKSPACE, 'uploads'),
+  path.resolve(BASE_WORKSPACE, 'obsidian_vault'),
+  path.resolve(BASE_WORKSPACE, 'workspace_out'),
+];
+
 
 const ALLOWED_BINARIES = new Set([
   'ls', 'pwd', 'echo', 'cat', 'head', 'tail', 'wc', 'date',
@@ -92,6 +98,12 @@ router.post('/execute', async (req, res) => {
       if (!filePath || typeof filePath !== 'string') throw new Error('filePath must be a string');
       if (typeof content !== 'string') throw new Error('content must be a string');
       const targetPath = ensureInsideWorkspace(path.resolve(BASE_WORKSPACE, filePath));
+      const allowedWrite = WRITE_ROOTS.some(
+        (root) => targetPath === root || targetPath.startsWith(root + path.sep)
+      );
+      if (!allowedWrite) {
+        throw new Error('Security Exception: Writes limited to uploads/, obsidian_vault/, workspace_out/');
+      }
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, content, 'utf-8');
       result = { success: true, message: `File written successfully at ${filePath}` };

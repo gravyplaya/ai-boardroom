@@ -1,5 +1,5 @@
 /**
- * server.js — AI Boardroom Express Server (multi-provider)
+ * server.js — AI Boardroom Express (v2.1 — streaming, hardened)
  */
 
 import express from 'express';
@@ -17,9 +17,8 @@ import uploadRoutes from './routes/upload.js';
 import executionRoutes from './routes/execution.js';
 import modelsRoutes from './routes/models.js';
 import settingsRoutes from './routes/settings.js';
-import { requireAuth } from './utils/auth.js';
+import { requireAuth, requireWriteAuth } from './utils/auth.js';
 import { rateLimiter } from './utils/rate_limiter.js';
-import { logSystemEvent } from './utils/vault.js';
 import { env } from './utils/env.js';
 
 dotenv.config({ quiet: true });
@@ -41,30 +40,56 @@ function buildCorsOrigin() {
   };
 }
 
+// Security headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), interest-cohort=()');
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' https://unpkg.com",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: blob:",
+      "connect-src 'self' https: wss: ws:",
+      "media-src 'self' blob:",
+      "frame-ancestors 'self'",
+      "base-uri 'self'",
+    ].join('; ')
+  );
+  next();
+});
+
 app.use(cors({ origin: buildCorsOrigin(), credentials: true }));
 app.use(rateLimiter);
 app.use(express.json({ limit: '4mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-app.use(express.static(join(__dirname, 'public'), {
-  index: 'index.html',
-  maxAge: IS_VERCEL ? '1h' : 0,
-}));
+app.use(
+  express.static(join(__dirname, 'public'), {
+    index: 'index.html',
+    maxAge: IS_VERCEL ? '1h' : 0,
+  })
+);
 
 app.use('/api', chatRoutes);
 app.use('/api/voice', voiceRoutes);
 app.use('/api/vault', vaultRoutes);
 app.use('/api/canvas', canvasRoutes);
-app.use('/api/upload', uploadRoutes);
+app.use('/api/upload', requireWriteAuth, uploadRoutes);
 app.use('/api/models', modelsRoutes);
 app.use('/api/settings', settingsRoutes);
-app.use('/api/tools', toolsRoutes);
+app.use('/api/tools', requireWriteAuth, toolsRoutes);
 app.use('/api/execution', requireAuth, executionRoutes);
 
-app.use('/uploads', express.static(join(__dirname, 'uploads')));
+// Uploads not world-listable without knowing filename; still gated by obscurity — no directory index
+app.use('/uploads', express.static(join(__dirname, 'uploads'), { index: false, fallthrough: true }));
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'ai-boardroom', version: '2.0.0' });
+  res.json({ ok: true, service: 'ai-boardroom', version: '2.1.0' });
 });
 
 app.use('/api', (req, res) => {
@@ -92,20 +117,8 @@ async function start() {
 
   if (IS_VERCEL) return;
 
-  app.listen(PORT, '0.0.0.0', async () => {
-    console.log('');
-    console.log('  ╔══════════════════════════════════════════════════╗');
-    console.log('  ║         AI BOARDROOM v2 — Multi-Provider         ║');
-    console.log(`  ║  Server:  http://0.0.0.0:${PORT}                     ║`);
-    console.log(`  ║  NVIDIA:  ${env('NVIDIA_API_KEY') ? 'configured' : 'add in Settings'}                   ║`);
-    console.log(`  ║  OpenRouter free fallback ready when keyed        ║`);
-    console.log('  ╚══════════════════════════════════════════════════╝');
-    console.log('');
-    try {
-      await logSystemEvent('system', 'SERVER_START', `AI Boardroom v2 on port ${PORT}`);
-    } catch {
-      /* ignore */
-    }
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`AI Boardroom v2.1 on 0.0.0.0:${PORT}`);
   });
 }
 

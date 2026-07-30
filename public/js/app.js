@@ -1,5 +1,6 @@
 /**
- * app.js — AI Boardroom Frontend (multi-provider + waveform input)
+ * app.js — AI Boardroom frontend v2.1
+ * Streaming chat · stop/regenerate · a11y · polished composer
  */
 
 const state = {
@@ -8,6 +9,9 @@ const state = {
   isLoading: false,
   boardMembers: [],
   boardPanelOpen: false,
+  abortController: null,
+  lastUserMessage: null,
+  lastAssistantEl: null,
 };
 
 const ROLE_NAMES = {
@@ -37,32 +41,44 @@ const boardMembersEl = $('#boardMembers');
 const inputRole = $('#inputRole');
 const roleSelector = $('#roleSelector');
 const metaModel = $('#metaModel');
+const liveRegion = () => document.getElementById('ariaLive');
 
 function providerHeaders() {
   return window.__boardroomSettings?.getProviderKeysHeader?.() || {};
 }
 
 function getSettings() {
-  return window.__boardroomSettings?.getSettings?.() || { roleModels: {}, globalProvider: 'nvidia', globalModel: '' };
+  return (
+    window.__boardroomSettings?.getSettings?.() || {
+      roleModels: {},
+      globalProvider: 'nvidia',
+      globalModel: '',
+    }
+  );
 }
 
 async function api(url, options = {}) {
-  const headers = {
-    ...(options.headers || {}),
-    ...providerHeaders(),
-  };
-  return fetch(url, { ...options, headers });
+  return fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), ...providerHeaders() },
+  });
+}
+
+function announce(msg) {
+  const el = liveRegion();
+  if (el) el.textContent = msg;
 }
 
 function init() {
   setGreeting();
   setupEventListeners();
   initMobileChrome();
+  initModalChrome();
   initWaveform();
   checkSystemStatus();
   loadBoardMembers();
   loadAnalytics();
-  setInterval(loadAnalytics, 10000);
+  setInterval(loadAnalytics, 15000);
   window.addEventListener('boardroom:settings', () => {
     checkSystemStatus();
     loadBoardMembers();
@@ -71,6 +87,16 @@ function init() {
     document.documentElement.style.setProperty('--app-vh', `${window.innerHeight * 0.01}px`);
   });
   document.documentElement.style.setProperty('--app-vh', `${window.innerHeight * 0.01}px`);
+
+  // visualViewport pin for mobile keyboard
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+    const onVV = () => {
+      document.documentElement.style.setProperty('--vv-offset', `${Math.max(0, window.innerHeight - vv.height - vv.offsetTop)}px`);
+    };
+    vv.addEventListener('resize', onVV);
+    vv.addEventListener('scroll', onVV);
+  }
 }
 
 function setGreeting() {
@@ -82,19 +108,24 @@ function setGreeting() {
 }
 
 function setupEventListeners() {
-  sendBtn?.addEventListener('click', sendMessage);
+  sendBtn?.addEventListener('click', () => {
+    if (state.isLoading) stopGeneration();
+    else sendMessage();
+  });
+
   chatInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      if (!state.isLoading) sendMessage();
     }
+    if (e.key === 'Escape' && state.isLoading) stopGeneration();
   });
 
   chatInput?.addEventListener('input', () => {
     chatInput.style.height = 'auto';
     chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
-    if (sendBtn) sendBtn.disabled = !chatInput.value.trim();
-    setComposerActive(!!chatInput.value.trim());
+    updateSendButton();
+    setComposerActive(!!chatInput.value.trim() || state.isLoading);
   });
 
   chatInput?.addEventListener('focus', () => setComposerActive(true));
@@ -113,45 +144,110 @@ function setupEventListeners() {
   boardBtn?.addEventListener('click', () => {
     state.boardPanelOpen = !state.boardPanelOpen;
     boardPanel?.classList.toggle('open', state.boardPanelOpen);
+    boardBtn.setAttribute('aria-expanded', state.boardPanelOpen ? 'true' : 'false');
   });
   panelClose?.addEventListener('click', () => {
     state.boardPanelOpen = false;
     boardPanel?.classList.remove('open');
+    boardBtn?.setAttribute('aria-expanded', 'false');
   });
 
   inputRole?.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (!roleSelector) return;
-    const rect = inputRole.getBoundingClientRect();
-    const narrow = window.matchMedia('(max-width: 900px)').matches;
-    if (narrow) {
-      roleSelector.style.left = '10px';
-      roleSelector.style.right = '10px';
-      roleSelector.style.width = 'auto';
-    } else {
-      roleSelector.style.left = rect.left + 'px';
-      roleSelector.style.right = 'auto';
-      roleSelector.style.width = '';
+    toggleRoleSelector();
+  });
+  inputRole?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleRoleSelector();
     }
-    roleSelector.style.bottom = Math.max(12, window.innerHeight - rect.top + 8) + 'px';
-    roleSelector.hidden = !roleSelector.hidden;
   });
 
   document.querySelectorAll('.role-option').forEach((opt) => {
+    if (!opt.hasAttribute('role')) opt.setAttribute('role', 'option');
+    if (!opt.hasAttribute('tabindex')) opt.setAttribute('tabindex', '0');
     opt.addEventListener('click', () => {
       setActiveRole(opt.dataset.role);
       if (roleSelector) roleSelector.hidden = true;
+      inputRole?.setAttribute('aria-expanded', 'false');
+    });
+    opt.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        opt.click();
+      }
     });
   });
 
   document.addEventListener('click', () => {
     if (roleSelector) roleSelector.hidden = true;
+    inputRole?.setAttribute('aria-expanded', 'false');
   });
 
-  // Model chip opens settings
   document.getElementById('modelChip')?.addEventListener('click', () => {
     document.getElementById('settingsBtn')?.click();
   });
+
+  messagesEl?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-msg-action]');
+    if (!btn) return;
+    const action = btn.dataset.msgAction;
+    const msg = btn.closest('.message');
+    if (action === 'copy') {
+      const raw = msg?.dataset?.raw || msg?.querySelector('.msg-content')?.innerText || '';
+      navigator.clipboard?.writeText(raw).then(() => {
+        btn.textContent = 'Copied';
+        setTimeout(() => (btn.textContent = 'Copy'), 1200);
+      });
+    } else if (action === 'regenerate') {
+      if (state.lastUserMessage && !state.isLoading) {
+        sendMessage(state.lastUserMessage, { regenerate: true });
+      }
+    } else if (action === 'copy-code') {
+      const pre = btn.closest('pre');
+      const code = pre?.querySelector('code')?.innerText || '';
+      navigator.clipboard?.writeText(code);
+      btn.textContent = 'Copied';
+      setTimeout(() => (btn.textContent = 'Copy'), 1200);
+    }
+  });
+}
+
+function toggleRoleSelector() {
+  if (!roleSelector) return;
+  const rect = inputRole.getBoundingClientRect();
+  const narrow = window.matchMedia('(max-width: 900px)').matches;
+  if (narrow) {
+    roleSelector.style.left = '10px';
+    roleSelector.style.right = '10px';
+    roleSelector.style.width = 'auto';
+  } else {
+    roleSelector.style.left = rect.left + 'px';
+    roleSelector.style.right = 'auto';
+    roleSelector.style.width = '';
+  }
+  roleSelector.style.bottom = Math.max(12, window.innerHeight - rect.top + 8) + 'px';
+  const open = roleSelector.hidden;
+  roleSelector.hidden = !open;
+  inputRole?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  roleSelector?.setAttribute('role', 'listbox');
+}
+
+function updateSendButton() {
+  if (!sendBtn) return;
+  if (state.isLoading) {
+    sendBtn.disabled = false;
+    sendBtn.classList.add('is-stop');
+    sendBtn.setAttribute('aria-label', 'Stop generating');
+    sendBtn.title = 'Stop';
+    sendBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`;
+  } else {
+    sendBtn.classList.remove('is-stop');
+    sendBtn.setAttribute('aria-label', 'Send message');
+    sendBtn.title = 'Send';
+    sendBtn.disabled = !chatInput?.value?.trim();
+    sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>`;
+  }
 }
 
 function setComposerActive(on) {
@@ -166,7 +262,9 @@ function setActiveRole(role) {
   if (dot) dot.dataset.role = role;
   if (name) name.textContent = ROLE_NAMES[role] || role;
   const member = state.boardMembers.find((m) => m.role === role);
-  if (member && metaModel) metaModel.textContent = `${member.provider || ''} · ${member.model || ''}`.replace(/^ · /, '');
+  if (member && metaModel) {
+    metaModel.textContent = `${member.provider || ''} · ${member.model || ''}`.replace(/^ · /, '');
+  }
   updateModelChip();
 }
 
@@ -178,7 +276,7 @@ async function checkSystemStatus() {
     statusDot?.classList.add('online');
     statusDot?.classList.remove('offline');
     const narrow = window.matchMedia('(max-width: 900px)').matches;
-    if (data.demoMode) statusText.textContent = narrow ? 'Demo' : 'Demo · add NVIDIA key';
+    if (data.demoMode) statusText.textContent = narrow ? 'Demo' : 'Demo · add keys';
     else if (data.nvidiaConfigured) statusText.textContent = narrow ? 'NIM' : 'NVIDIA Online';
     else if (data.apiKeyConfigured) statusText.textContent = 'Online';
     else statusText.textContent = 'Online';
@@ -242,7 +340,10 @@ async function loadAnalytics() {
               ? Object.entries(activity)
                   .sort((a, b) => b[1] - a[1])
                   .slice(0, 3)
-                  .map(([a, c]) => `<div class="analytics-row"><span>${escapeHtml(a)}</span><strong class="accent">${c}</strong></div>`)
+                  .map(
+                    ([a, c]) =>
+                      `<div class="analytics-row"><span>${escapeHtml(a)}</span><strong class="accent">${c}</strong></div>`
+                  )
                   .join('')
               : '<div class="analytics-empty">No events yet</div>'
           }
@@ -258,9 +359,9 @@ function renderBoardMembers() {
   boardMembersEl.innerHTML = state.boardMembers
     .map(
       (member) => `
-    <div class="member-card" data-role="${member.role}">
+    <button type="button" class="member-card" data-role="${member.role}">
       <div class="member-card-avatar">
-        <img src="/images/${member.role}.png" alt="${member.role}" onerror="this.src='/images/jarvis.png'" />
+        <img src="/images/${member.role}.png" alt="${escapeHtml(ROLE_NAMES[member.role] || member.role)}" onerror="this.src='/images/jarvis.png'" />
       </div>
       <div class="member-card-content">
         <h3>${ROLE_NAMES[member.role] || member.role}</h3>
@@ -269,7 +370,7 @@ function renderBoardMembers() {
           <span class="model-tag">${escapeHtml((member.provider || '') + ' · ' + (member.model || ''))}</span>
         </div>
       </div>
-    </div>`
+    </button>`
     )
     .join('');
 
@@ -282,19 +383,44 @@ function renderBoardMembers() {
   });
 }
 
-async function sendMessage() {
-  const text = chatInput?.value?.trim();
+function stopGeneration() {
+  try {
+    state.abortController?.abort();
+  } catch {
+    /* ignore */
+  }
+  state.abortController = null;
+  state.isLoading = false;
+  setComposerActive(!!chatInput?.value?.trim());
+  updateSendButton();
+  announce('Generation stopped');
+}
+
+async function sendMessage(forcedText, opts = {}) {
+  const text = (forcedText ?? chatInput?.value?.trim()) || '';
   if (!text || state.isLoading) return;
   if (welcomeScreen) welcomeScreen.style.display = 'none';
 
-  appendMessage('user', text);
-  chatInput.value = '';
-  chatInput.style.height = 'auto';
-  if (sendBtn) sendBtn.disabled = true;
+  state.lastUserMessage = text;
+  if (!opts.regenerate) {
+    appendMessage('user', text);
+    if (chatInput) {
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+    }
+  } else {
+    // remove last assistant if regenerating
+    const last = messagesEl?.querySelector('.message--assistant:last-of-type');
+    last?.remove();
+  }
 
-  const typingEl = showTyping();
   state.isLoading = true;
   setComposerActive(true);
+  updateSendButton();
+  announce('Generating response');
+
+  const streamEl = beginAssistantStream();
+  state.abortController = new AbortController();
 
   try {
     const settings = getSettings();
@@ -309,42 +435,184 @@ async function sendMessage() {
       body.model = settings.globalModel;
     }
 
-    const res = await api('/api/chat', {
+    const res = await api('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: state.abortController.signal,
     });
 
-    let data;
-    const ct = res.headers.get('content-type') || '';
-    if (ct.includes('application/json')) data = await res.json();
-    else throw new Error('Server returned non-JSON (API may not be deployed).');
-
-    removeTyping(typingEl);
-    if (data.error && !data.response) {
-      appendMessage('assistant', `⚠️ ${data.error}`, { role: 'jarvis', model: 'error' });
+    if (!res.ok) {
+      // fallback non-stream
+      const fallback = await api('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await fallback.json();
+      finalizeAssistantStream(streamEl, data.response || data.error || 'No response', {
+        role: data.role || state.activeRole,
+        model: data.model,
+        provider: data.provider,
+        boardMember: data.boardMember,
+      });
       return;
     }
-    appendMessage('assistant', data.response || 'No response.', {
-      role: data.role || state.activeRole,
-      model: data.model,
-      provider: data.provider,
-      boardMember: data.boardMember,
-    });
-    if (metaModel && data.model) metaModel.textContent = `${data.provider || ''} · ${data.model}`.replace(/^ · /, '');
+
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error('No stream reader');
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let full = '';
+    let meta = { role: state.activeRole };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const part of parts) {
+        const line = part
+          .split('\n')
+          .filter((l) => l.startsWith('data:'))
+          .map((l) => l.slice(5).trim())
+          .join('');
+        if (!line) continue;
+        let ev;
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (ev.type === 'meta') {
+          meta = { ...meta, ...ev };
+          updateStreamHeader(streamEl, meta);
+        } else if (ev.type === 'delta' && ev.delta) {
+          full += ev.delta;
+          updateStreamContent(streamEl, full);
+        } else if (ev.type === 'done') {
+          full = ev.content || full;
+          meta = { ...meta, ...ev };
+        } else if (ev.type === 'error' && !full) {
+          full = ev.error || 'Error';
+        }
+      }
+    }
+
+    finalizeAssistantStream(streamEl, full || 'No response.', meta);
+    if (metaModel && meta.model) {
+      metaModel.textContent = `${meta.provider || ''} · ${meta.model}`.replace(/^ · /, '');
+    }
   } catch (err) {
-    removeTyping(typingEl);
-    appendMessage('assistant', `⚠️ Connection error: ${err.message}`, { role: 'jarvis', model: 'error' });
+    if (err.name === 'AbortError') {
+      const partial = streamEl?.dataset?.raw || '';
+      finalizeAssistantStream(streamEl, partial ? partial + '\n\n*(stopped)*' : '*(stopped)*', {
+        role: state.activeRole,
+        model: 'stopped',
+      });
+    } else {
+      finalizeAssistantStream(streamEl, `Connection error: ${err.message}`, {
+        role: 'jarvis',
+        model: 'error',
+      });
+    }
   } finally {
     state.isLoading = false;
+    state.abortController = null;
     setComposerActive(!!chatInput?.value?.trim());
+    updateSendButton();
+    announce('Response ready');
   }
+}
+
+function beginAssistantStream() {
+  if (!messagesEl) return null;
+  const role = state.activeRole;
+  const msgEl = document.createElement('div');
+  msgEl.className = 'message message--assistant is-streaming';
+  msgEl.innerHTML = `
+    <div class="msg-avatar msg-avatar--${role}">
+      <img src="/images/${role}.png" alt="${escapeHtml(ROLE_NAMES[role] || role)}" onerror="this.src='/images/jarvis.png'" />
+    </div>
+    <div class="msg-body">
+      <div class="msg-header">
+        <span class="msg-name">${ROLE_NAMES[role] || role}</span>
+        <span class="msg-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        <span class="msg-model msg-model--live">streaming…</span>
+      </div>
+      <div class="msg-content"><span class="stream-cursor"></span></div>
+      <div class="msg-actions" hidden></div>
+    </div>`;
+  messagesEl.appendChild(msgEl);
+  state.lastAssistantEl = msgEl;
+  scrollToBottom();
+  return msgEl;
+}
+
+function updateStreamHeader(msgEl, meta) {
+  if (!msgEl) return;
+  const name = msgEl.querySelector('.msg-name');
+  const model = msgEl.querySelector('.msg-model');
+  const role = meta.role || state.activeRole;
+  if (name) name.textContent = ROLE_NAMES[role] || role;
+  if (model) {
+    model.textContent = meta.model
+      ? `${meta.provider ? meta.provider + ' · ' : ''}${meta.model}`
+      : 'streaming…';
+  }
+  const img = msgEl.querySelector('.msg-avatar img');
+  if (img) img.src = `/images/${role}.png`;
+}
+
+function updateStreamContent(msgEl, text) {
+  if (!msgEl) return;
+  msgEl.dataset.raw = text;
+  const content = msgEl.querySelector('.msg-content');
+  if (content) content.innerHTML = renderMarkdown(text) + '<span class="stream-cursor"></span>';
+  scrollToBottom();
+}
+
+function finalizeAssistantStream(msgEl, text, meta = {}) {
+  if (!msgEl) {
+    appendMessage('assistant', text, meta);
+    return;
+  }
+  msgEl.classList.remove('is-streaming');
+  msgEl.dataset.raw = text;
+  updateStreamHeader(msgEl, meta);
+  const content = msgEl.querySelector('.msg-content');
+  if (content) content.innerHTML = renderMarkdown(text);
+  enhanceCodeBlocks(msgEl);
+  const actions = msgEl.querySelector('.msg-actions');
+  if (actions) {
+    actions.hidden = false;
+    actions.innerHTML = `
+      <button type="button" class="msg-action-btn" data-msg-action="copy">Copy</button>
+      <button type="button" class="msg-action-btn" data-msg-action="regenerate">Regenerate</button>
+    `;
+  }
+  scrollToBottom();
+}
+
+function enhanceCodeBlocks(root) {
+  root?.querySelectorAll('pre')?.forEach((pre) => {
+    if (pre.querySelector('.code-copy')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'code-copy msg-action-btn';
+    btn.dataset.msgAction = 'copy-code';
+    btn.textContent = 'Copy';
+    pre.style.position = 'relative';
+    pre.appendChild(btn);
+  });
 }
 
 function appendMessage(type, content, meta = {}) {
   if (!messagesEl) return;
   const msgEl = document.createElement('div');
   msgEl.className = `message message--${type}`;
+  msgEl.dataset.raw = content;
   const role = meta.role || state.activeRole;
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -358,7 +626,7 @@ function appendMessage(type, content, meta = {}) {
   } else {
     msgEl.innerHTML = `
       <div class="msg-avatar msg-avatar--${role}">
-        <img src="/images/${role}.png" alt="${ROLE_NAMES[role] || role}" onerror="this.src='/images/jarvis.png'" />
+        <img src="/images/${role}.png" alt="${escapeHtml(ROLE_NAMES[role] || role)}" onerror="this.src='/images/jarvis.png'" />
       </div>
       <div class="msg-body">
         <div class="msg-header">
@@ -367,39 +635,42 @@ function appendMessage(type, content, meta = {}) {
           ${meta.model ? `<span class="msg-model">${escapeHtml((meta.provider ? meta.provider + ' · ' : '') + meta.model)}</span>` : ''}
         </div>
         <div class="msg-content">${renderMarkdown(content)}</div>
+        <div class="msg-actions">
+          <button type="button" class="msg-action-btn" data-msg-action="copy">Copy</button>
+          <button type="button" class="msg-action-btn" data-msg-action="regenerate">Regenerate</button>
+        </div>
       </div>`;
+    enhanceCodeBlocks(msgEl);
   }
   messagesEl.appendChild(msgEl);
   scrollToBottom();
+  return msgEl;
 }
 
 function showTyping() {
-  if (!messagesEl) return null;
-  const role = state.activeRole;
-  const el = document.createElement('div');
-  el.className = 'message message--assistant';
-  el.id = 'typing-indicator';
-  el.innerHTML = `
-    <div class="msg-avatar msg-avatar--${role}">
-      <img src="/images/${role}.png" alt="" onerror="this.src='/images/jarvis.png'" />
-    </div>
-    <div class="msg-body">
-      <div class="msg-header"><span class="msg-name">${ROLE_NAMES[role]} is thinking…</span></div>
-      <div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>
-    </div>`;
-  messagesEl.appendChild(el);
-  scrollToBottom();
-  return el;
+  return beginAssistantStream();
 }
 
 function removeTyping(el) {
-  if (el?.parentNode) el.parentNode.removeChild(el);
+  if (el?.parentNode && el.classList.contains('is-streaming') && !el.dataset.raw) {
+    el.parentNode.removeChild(el);
+  }
 }
 
 function scrollToBottom() {
   requestAnimationFrame(() => {
     if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
   });
+}
+
+function safeHref(url) {
+  try {
+    const u = new URL(url, window.location.origin);
+    if (u.protocol === 'http:' || u.protocol === 'https:') return u.href;
+  } catch {
+    /* ignore */
+  }
+  return '#';
 }
 
 function renderMarkdown(text) {
@@ -409,7 +680,9 @@ function renderMarkdown(text) {
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+    return `<a href="${escapeHtml(safeHref(href))}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  });
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
   html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
@@ -424,10 +697,41 @@ function renderMarkdown(text) {
 }
 
 function escapeHtml(text) {
-  const map = { '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' };
-  return String(text).replace(/[&<>"']/g, (c) => map[c]);
+  return String(text ?? '')
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/"/g, '"')
+    .replace(/'/g, '&#39;');
 }
 
+function initModalChrome() {
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const settings = document.getElementById('settingsModal');
+    if (settings && !settings.hidden) {
+      settings.hidden = true;
+      return;
+    }
+    ['mindMapModal', 'canvasModal', 'notepadModal', 'attachSheet'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && !el.hidden) el.hidden = true;
+    });
+    if (state.boardPanelOpen) {
+      state.boardPanelOpen = false;
+      boardPanel?.classList.remove('open');
+    }
+    if (roleSelector) roleSelector.hidden = true;
+  });
+
+  // Mark settings as dialog
+  const settings = document.getElementById('settingsModal');
+  if (settings) {
+    settings.setAttribute('role', 'dialog');
+    settings.setAttribute('aria-modal', 'true');
+    settings.setAttribute('aria-label', 'Boardroom settings');
+  }
+}
 
 function initMobileChrome() {
   const moreBtn = document.getElementById('headerMoreBtn');
@@ -442,8 +746,7 @@ function initMobileChrome() {
     });
     moreMenu.querySelectorAll('[data-trigger]').forEach((item) => {
       item.addEventListener('click', () => {
-        const id = item.getAttribute('data-trigger');
-        document.getElementById(id)?.click();
+        document.getElementById(item.getAttribute('data-trigger'))?.click();
         moreMenu.setAttribute('hidden', '');
         moreBtn.setAttribute('aria-expanded', 'false');
       });
@@ -455,14 +758,12 @@ function initMobileChrome() {
     moreMenu.addEventListener('click', (e) => e.stopPropagation());
   }
 
-  // iOS keyboard: scroll focused input into view
   document.getElementById('chatInput')?.addEventListener('focus', () => {
     setTimeout(() => {
       document.getElementById('composerShell')?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-    }, 300);
+    }, 280);
   });
 
-  // Close board panel when tapping backdrop on mobile
   document.getElementById('main')?.addEventListener('click', (e) => {
     if (!window.matchMedia('(max-width: 900px)').matches) return;
     if (!state.boardPanelOpen) return;
@@ -472,13 +773,13 @@ function initMobileChrome() {
   });
 }
 
-// ── Waveform canvas in composer ─────────────────────────────────────────────
 function initWaveform() {
   const canvas = document.getElementById('composerWave');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   let raf = 0;
   let t = 0;
+  let running = true;
 
   function resize() {
     const rect = canvas.parentElement.getBoundingClientRect();
@@ -493,19 +794,31 @@ function initWaveform() {
   resize();
   window.addEventListener('resize', resize);
 
+  const preferReduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+
   function draw() {
-    const w = canvas.clientWidth || 300;
-    const h = window.matchMedia('(max-width: 900px)').matches ? 22 : 36;
-    ctx.clearRect(0, 0, w, h);
+    if (!running) return;
     const shell = document.getElementById('composerShell');
     const active = shell?.classList.contains('is-active') || shell?.classList.contains('is-thinking');
     const thinking = shell?.classList.contains('is-thinking');
+    // Idle: slow tick every ~500ms instead of 60fps
+    if (!active && !thinking) {
+      t += 0.2;
+    } else {
+      t += 1;
+    }
+
+    const w = canvas.clientWidth || 300;
+    const h = window.matchMedia('(max-width: 900px)').matches ? 22 : 36;
+    ctx.clearRect(0, 0, w, h);
     const bars = 48;
     const gap = 2;
     const barW = (w - gap * bars) / bars;
     for (let i = 0; i < bars; i++) {
       const phase = t * (thinking ? 0.18 : 0.08) + i * 0.35;
-      const envelope = active ? 0.55 + 0.45 * Math.sin(phase) * Math.sin(phase * 0.4 + t * 0.05) : 0.15 + 0.08 * Math.sin(i + t * 0.02);
+      const envelope = active
+        ? 0.55 + 0.45 * Math.sin(phase) * Math.sin(phase * 0.4 + t * 0.05)
+        : 0.12 + 0.06 * Math.sin(i + t * 0.02);
       const bh = Math.max(2, envelope * (h - 8));
       const x = i * (barW + gap);
       const y = (h - bh) / 2;
@@ -513,15 +826,26 @@ function initWaveform() {
       grad.addColorStop(0, thinking ? '#22d3ee' : '#60a5fa');
       grad.addColorStop(1, thinking ? '#a78bfa' : '#06b6d4');
       ctx.fillStyle = grad;
-      ctx.globalAlpha = active ? 0.85 : 0.35;
+      ctx.globalAlpha = active ? 0.85 : 0.28;
       ctx.beginPath();
       const r = Math.min(2, barW / 2);
-      ctx.roundRect?.(x, y, barW, bh, r) || ctx.rect(x, y, barW, bh);
+      if (ctx.roundRect) ctx.roundRect(x, y, barW, bh, r);
+      else ctx.rect(x, y, barW, bh);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
-    t += 1;
-    raf = requestAnimationFrame(draw);
+
+    if (preferReduce.matches && !thinking) {
+      setTimeout(() => {
+        raf = requestAnimationFrame(draw);
+      }, 400);
+    } else if (!active && !thinking) {
+      setTimeout(() => {
+        raf = requestAnimationFrame(draw);
+      }, 120);
+    } else {
+      raf = requestAnimationFrame(draw);
+    }
   }
   draw();
 }
@@ -536,5 +860,6 @@ window.__boardroom = {
   scrollToBottom,
   reloadStatus: checkSystemStatus,
   loadBoardMembers,
+  stopGeneration,
   api,
 };

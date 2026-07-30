@@ -1,5 +1,5 @@
 /**
- * paperclip_monitor.js — Paperclip Agent Monitoring Panel
+ * paperclip_monitor.js — Agent Activity Panel
  * Displays real-time task execution and agent activity
  */
 
@@ -19,7 +19,7 @@ function openMonitorModal() {
   modal.innerHTML = `
     <div class="modal-content">
       <div class="modal-header">
-        <h2>Paperclip Agent Monitoring</h2>
+        <h2>Agent Activity</h2>
         <button class="modal-close" id="monitorModalClose">&times;</button>
       </div>
 

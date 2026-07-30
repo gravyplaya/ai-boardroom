@@ -12,6 +12,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import dotenv from 'dotenv';
 import { env } from '../utils/env.js';
+import { requireWriteAuth } from '../utils/auth.js';
 import { VOICE_PROVIDERS } from '../utils/providers.js';
 import {
   XAI_VOICE_MODELS,
@@ -203,8 +204,16 @@ router.post('/token', async (req, res) => {
 
     // ── Gemini Live ──────────────────────────────────────────────────────
     if (provider === 'gemini' || provider === 'google') {
+      // Only use browser-supplied Gemini key — never exfiltrate server GEMINI_API_KEY into client JS
+      const browserKey = clientKeys.google || clientKeys.gemini;
+      if (!browserKey) {
+        return res.status(400).json({
+          error: 'Gemini Live requires your key in Settings',
+          message: 'Paste a Gemini API key in Settings (browser-only). Server-side Gemini keys are not sent to the client for security.',
+        });
+      }
       const model = env('GEMINI_LIVE_MODEL', 'models/gemini-2.5-flash-native-audio-preview-12-2025');
-      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${browserKey}`;
       const setupMessage = {
         setup: {
           model,
@@ -252,7 +261,8 @@ router.post('/token', async (req, res) => {
         protocol: 'openai-realtime',
         model,
         wsUrl: `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`,
-        auth: clientSecret || apiKey,
+        auth: clientSecret || clientKeys.openai || null,
+        requiresClientKey: !clientSecret && !clientKeys.openai,
         instructions: systemText,
         voice: env('OPENAI_VOICE_NAME', 'alloy'),
         sampleRate: 24000,
@@ -289,6 +299,14 @@ async function executeVoiceTool(name, args = {}, clientKeys = {}) {
   }
   if (name === 'write_file') {
     const targetPath = ensureInsideWorkspace(path.resolve(BASE_WORKSPACE, args.filePath));
+    const roots = [
+      path.resolve(BASE_WORKSPACE, 'uploads'),
+      path.resolve(BASE_WORKSPACE, 'obsidian_vault'),
+      path.resolve(BASE_WORKSPACE, 'workspace_out'),
+    ];
+    if (!roots.some((r) => targetPath === r || targetPath.startsWith(r + path.sep))) {
+      throw new Error('Writes limited to uploads/, obsidian_vault/, workspace_out/');
+    }
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, String(args.content ?? ''), 'utf-8');
     return { success: true, path: args.filePath };
@@ -375,7 +393,7 @@ async function executeVoiceTool(name, args = {}, clientKeys = {}) {
 }
 
 // POST /api/voice/tool — execute a boardroom function tool for the voice agent
-router.post('/tool', async (req, res) => {
+router.post('/tool', requireWriteAuth, async (req, res) => {
   try {
     const { name, arguments: args, args: args2, call_id: callId } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Missing tool name' });

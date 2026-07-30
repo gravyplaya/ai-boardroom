@@ -325,5 +325,182 @@ Respond with ONLY JSON: {"role":"role_key","reason":"why"}`,
   }
 }
 
+
+/** Stream OpenAI-compatible chat completions; yields text deltas. */
+async function* streamOpenAICompatible({ baseUrl, apiKey, model, messages, temperature, extraHeaders = {} }) {
+  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      ...extraHeaders,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: temperature ?? 0.7,
+      max_tokens: Number(env('LLM_MAX_TOKENS', '2048')),
+      stream: true,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status} ${text.slice(0, 400)}`);
+  }
+  if (!res.body) throw new Error('No stream body');
+
+  // node-fetch v3: body is web ReadableStream or Node stream
+  const reader = res.body.getReader ? res.body.getReader() : null;
+  let buffer = '';
+  const decoder = new TextDecoder();
+
+  async function* fromReader(r) {
+    while (true) {
+      const { done, value } = await r.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (payload === '[DONE]') return;
+        try {
+          const json = JSON.parse(payload);
+          const delta = json.choices?.[0]?.delta?.content || '';
+          if (delta) yield { delta, model: json.model || model };
+        } catch { /* skip */ }
+      }
+    }
+  }
+
+  if (reader) {
+    yield* fromReader(reader);
+    return;
+  }
+
+  // Node.js async iterable fallback
+  for await (const chunk of res.body) {
+    buffer += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const payload = trimmed.slice(5).trim();
+      if (payload === '[DONE]') return;
+      try {
+        const json = JSON.parse(payload);
+        const delta = json.choices?.[0]?.delta?.content || '';
+        if (delta) yield { delta, model: json.model || model };
+      } catch { /* skip */ }
+    }
+  }
+}
+
+/**
+ * Stream a response from the first working provider (OpenAI-compatible only).
+ * Falls back to non-stream routeToLLM if stream fails for all.
+ */
+export async function* streamRouteToLLM(opts) {
+  const {
+    prompt,
+    role = 'jarvis',
+    messages = null,
+    model = null,
+    provider = null,
+    temperature = null,
+    clientKeys = {},
+    roleModels = {},
+  } = opts;
+
+  const persona = BOARD_PERSONAS[role];
+  if (!persona) throw new Error(`Unknown role: ${role}`);
+
+  const requestMessages = buildMessages({
+    prompt,
+    messages,
+    systemPrompt: persona.systemPrompt,
+  });
+
+  const attempts = buildAttemptPlan({ role, provider, model, roleModels, clientKeys });
+  if (!attempts.length) {
+    throw new Error('No LLM provider keys configured.');
+  }
+
+  const errors = [];
+  for (const attempt of attempts) {
+    if (attempt.provider === 'anthropic') {
+      // Anthropic stream not wired — skip to next or use full response
+      try {
+        const full = await runAttempt({
+          provider: attempt.provider,
+          model: attempt.model,
+          messages: requestMessages,
+          temperature: temperature ?? persona.temperature,
+          clientKeys,
+        });
+        yield {
+          type: 'meta',
+          provider: attempt.provider,
+          model: full.model,
+          role,
+          boardMember: persona.description,
+        };
+        // yield in chunks for UI smoothness
+        const chunkSize = 24;
+        for (let i = 0; i < full.content.length; i += chunkSize) {
+          yield { type: 'delta', delta: full.content.slice(i, i + chunkSize) };
+        }
+        yield { type: 'done', content: full.content, usage: full.usage || {} };
+        return;
+      } catch (err) {
+        errors.push(`${attempt.provider}: ${err.message}`);
+        continue;
+      }
+    }
+
+    try {
+      const apiKey = resolveKey(attempt.provider, clientKeys);
+      if (!apiKey) throw new Error('no key');
+      const p = PROVIDERS[attempt.provider];
+      const extraHeaders = {};
+      if (attempt.provider === 'openrouter') {
+        extraHeaders['HTTP-Referer'] = env('APP_URL', 'https://ai-boardroom.local');
+        extraHeaders['X-Title'] = 'AI Boardroom';
+      }
+      yield {
+        type: 'meta',
+        provider: attempt.provider,
+        model: attempt.model,
+        role,
+        boardMember: persona.description,
+      };
+      let full = '';
+      for await (const part of streamOpenAICompatible({
+        baseUrl: p.baseUrl,
+        apiKey,
+        model: attempt.model,
+        messages: requestMessages,
+        temperature: temperature ?? persona.temperature,
+        extraHeaders,
+      })) {
+        full += part.delta;
+        yield { type: 'delta', delta: part.delta, model: part.model };
+      }
+      if (!full) throw new Error('Empty stream');
+      yield { type: 'done', content: full, model: attempt.model, usage: {} };
+      return;
+    } catch (err) {
+      console.warn(`[LLM stream] ${attempt.provider}/${attempt.model}: ${err.message}`);
+      errors.push(`${attempt.provider}/${attempt.model}: ${err.message}`);
+    }
+  }
+  throw new Error(`All stream providers failed.\n${errors.slice(0, 6).join('\n')}`);
+}
+
 export { BOARD_PERSONAS as BOARD_MODELS };
-export default { routeToLLM, getBoardMembers, identifyBoardMember };
+export default { routeToLLM, streamRouteToLLM, getBoardMembers, identifyBoardMember };
+

@@ -44,7 +44,16 @@ export async function executeJavaScript(code, options = {}) {
       const result = spawnSync('node', [codeFile], {
         timeout,
         encoding: 'utf-8',
-        env: { ...process.env, ...env },
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          LANG: process.env.LANG || 'C.UTF-8',
+          TMPDIR: process.env.TMPDIR || '/tmp',
+          NODE_ENV: 'sandbox',
+          ...Object.fromEntries(
+            Object.entries(env || {}).filter(([k]) => !/KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i.test(k))
+          ),
+        },
         maxBuffer: 10 * 1024 * 1024, // 10MB
       });
 
@@ -106,7 +115,16 @@ export async function executePython(code, options = {}) {
       const result = spawnSync('python3', [codeFile], {
         timeout,
         encoding: 'utf-8',
-        env: { ...process.env, ...env },
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          LANG: process.env.LANG || 'C.UTF-8',
+          TMPDIR: process.env.TMPDIR || '/tmp',
+          NODE_ENV: 'sandbox',
+          ...Object.fromEntries(
+            Object.entries(env || {}).filter(([k]) => !/KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i.test(k))
+          ),
+        },
         maxBuffer: 10 * 1024 * 1024,
       });
 
@@ -161,7 +179,16 @@ export async function executeShell(command, options = {}) {
     const result = spawnSync('sh', ['-c', command], {
       timeout,
       encoding: 'utf-8',
-      env: { ...process.env, ...env },
+      env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          LANG: process.env.LANG || 'C.UTF-8',
+          TMPDIR: process.env.TMPDIR || '/tmp',
+          NODE_ENV: 'sandbox',
+          ...Object.fromEntries(
+            Object.entries(env || {}).filter(([k]) => !/KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i.test(k))
+          ),
+        },
       maxBuffer: 10 * 1024 * 1024,
     });
 

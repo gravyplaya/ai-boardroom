@@ -1,32 +1,24 @@
 /**
- * chat.js — Chat API with multi-provider routing + client key overrides
+ * chat.js — Chat + SSE streaming + agent activity
  */
 
 import { Router } from 'express';
-import { routeToLLM, getBoardMembers, identifyBoardMember } from '../utils/llm_router.js';
+import { routeToLLM, streamRouteToLLM, getBoardMembers, identifyBoardMember } from '../utils/llm_router.js';
 import { logSystemEvent } from '../utils/vault.js';
-import { orchestrateMessage, getTaskStatus, getAllAgents } from '../utils/paperclip_orchestration.js';
+import {
+  orchestrateMessage,
+  getTaskStatus,
+  getAllAgents,
+  completeTask,
+  failTask,
+  listTasks,
+} from '../utils/paperclip_orchestration.js';
 import { resolveKey, DEFAULT_ROLE_MODELS, PROVIDERS } from '../utils/providers.js';
-import { env } from '../utils/env.js';
+import { extractClientKeys } from '../utils/client_keys.js';
+import { authEnabled } from '../utils/auth.js';
 
 const router = Router();
 const conversations = new Map();
-const taskHistory = new Map();
-
-function extractClientKeys(req) {
-  const hdr = req.headers['x-provider-keys'];
-  if (hdr) {
-    try {
-      return JSON.parse(Buffer.from(String(hdr), 'base64').toString('utf8'));
-    } catch {
-      /* ignore */
-    }
-  }
-  if (req.body?.providerKeys && typeof req.body.providerKeys === 'object') {
-    return req.body.providerKeys;
-  }
-  return {};
-}
 
 function anyProviderConfigured(clientKeys = {}) {
   return Object.keys(PROVIDERS).some((id) => !!resolveKey(id, clientKeys));
@@ -36,13 +28,12 @@ function demoResponse(role = 'jarvis') {
   return {
     response:
       `I'm **JARVIS**, your Chief of Staff. No LLM provider keys are active yet.\n\n` +
-      `**Quick start (recommended):**\n` +
-      `1. Open **Settings** (gear icon)\n` +
-      `2. Paste your **NVIDIA NIM** API key from [build.nvidia.com](https://build.nvidia.com)\n` +
-      `3. Optionally add OpenRouter free-tier, OpenAI, Claude, Gemini, or Grok keys\n` +
-      `4. Assign models per board member\n\n` +
-      `NVIDIA is the primary stack. OpenRouter free models activate automatically as fallback when configured.\n\n` +
-      `UI panels (vault, canvas, mind map, notepad) work offline either way.`,
+      `**Quick start:**\n` +
+      `1. Open **Settings**\n` +
+      `2. Paste your **NVIDIA NIM** key from [build.nvidia.com](https://build.nvidia.com)\n` +
+      `3. Optionally add OpenRouter, OpenAI, Claude, Gemini, or xAI\n` +
+      `4. Save → chat streams live\n\n` +
+      `Vault, canvas, mind map, and notepad work offline either way.`,
     model: 'demo-mode',
     provider: 'none',
     role,
@@ -53,10 +44,26 @@ function demoResponse(role = 'jarvis') {
 }
 
 function isMissingKeyError(message = '') {
-  return /Neither NVIDIA_API_KEY|no LLM provider|not configured|No API key for provider/i.test(message);
+  return /Neither NVIDIA_API_KEY|no LLM provider|not configured|No API key for provider|No LLM provider/i.test(
+    message
+  );
 }
 
-// ── POST /api/chat ──────────────────────────────────────────────────────────
+function getHistory(sessionId) {
+  if (!conversations.has(sessionId)) conversations.set(sessionId, []);
+  return conversations.get(sessionId);
+}
+
+function trimHistory(sessionId, history) {
+  if (history.length > 50) conversations.set(sessionId, history.slice(-50));
+  // Cap total sessions
+  if (conversations.size > 100) {
+    const first = conversations.keys().next().value;
+    conversations.delete(first);
+  }
+}
+
+// POST /api/chat — non-streaming (compat)
 router.post('/chat', async (req, res) => {
   try {
     const {
@@ -74,15 +81,14 @@ router.post('/chat', async (req, res) => {
 
     const clientKeys = extractClientKeys(req);
     const mergedRoleModels = { ...DEFAULT_ROLE_MODELS, ...roleModels };
+    const history = getHistory(sessionId);
 
-    if (!conversations.has(sessionId)) conversations.set(sessionId, []);
-    const history = conversations.get(sessionId);
-
+    let taskId = null;
     try {
-      const orchestrationResult = await orchestrateMessage({ message, sessionId, role });
-      if (orchestrationResult?.task) taskHistory.set(orchestrationResult.task.id, orchestrationResult.task);
+      const orch = await orchestrateMessage({ message, sessionId, role });
+      taskId = orch?.task?.id || null;
     } catch (e) {
-      console.warn('[Paperclip]', e.message);
+      console.warn('[AgentActivity]', e.message);
     }
 
     history.push({ role: 'user', content: message });
@@ -90,7 +96,8 @@ router.post('/chat', async (req, res) => {
     if (!anyProviderConfigured(clientKeys)) {
       const demo = demoResponse(role);
       history.push({ role: 'assistant', content: demo.response });
-      return res.json(demo);
+      if (taskId) await completeTask(taskId, 'Demo response');
+      return res.json({ ...demo, taskId });
     }
 
     const result = await routeToLLM({
@@ -103,9 +110,8 @@ router.post('/chat', async (req, res) => {
     });
 
     history.push({ role: 'assistant', content: result.content });
-    if (history.length > 50) {
-      conversations.set(sessionId, history.slice(-50));
-    }
+    trimHistory(sessionId, history);
+    if (taskId) await completeTask(taskId, `Done via ${result.provider}/${result.model}`);
 
     try {
       await logSystemEvent(role, 'CHAT', `Processed by ${result.boardMember} via ${result.provider}/${result.model}`);
@@ -120,15 +126,14 @@ router.post('/chat', async (req, res) => {
       role: result.role,
       boardMember: result.boardMember,
       usage: result.usage,
+      taskId,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
     console.error('[CHAT ERROR]', err.message);
-    if (isMissingKeyError(err.message)) {
-      return res.json(demoResponse(req.body?.role || 'jarvis'));
-    }
-    res.json({
-      response: `I hit an error talking to the model providers:\n\n\`\`\`\n${err.message.slice(0, 1200)}\n\`\`\`\n\nOpen **Settings** to verify your NVIDIA (or other) API keys and model assignments.`,
+    if (isMissingKeyError(err.message)) return res.json(demoResponse(req.body?.role || 'jarvis'));
+    res.status(200).json({
+      response: `I hit an error talking to the model providers:\n\n\`\`\`\n${err.message.slice(0, 1200)}\n\`\`\`\n\nOpen **Settings** to verify your API keys.`,
       model: 'error',
       provider: 'error',
       role: req.body?.role || 'jarvis',
@@ -140,6 +145,119 @@ router.post('/chat', async (req, res) => {
   }
 });
 
+// POST /api/chat/stream — Server-Sent Events streaming
+router.post('/chat/stream', async (req, res) => {
+  const {
+    message,
+    sessionId = 'default',
+    role = 'jarvis',
+    model = null,
+    provider = null,
+    roleModels = {},
+  } = req.body || {};
+
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({ error: 'Message is required' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  const send = (obj) => {
+    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+
+  const clientKeys = extractClientKeys(req);
+  const mergedRoleModels = { ...DEFAULT_ROLE_MODELS, ...roleModels };
+  const history = getHistory(sessionId);
+
+  let taskId = null;
+  try {
+    const orch = await orchestrateMessage({ message, sessionId, role });
+    taskId = orch?.task?.id || null;
+  } catch {
+    /* ignore */
+  }
+
+  history.push({ role: 'user', content: message });
+
+  if (!anyProviderConfigured(clientKeys)) {
+    const demo = demoResponse(role);
+    history.push({ role: 'assistant', content: demo.response });
+    send({ type: 'meta', ...demo, taskId });
+    send({ type: 'delta', delta: demo.response });
+    send({ type: 'done', content: demo.response, taskId });
+    if (taskId) await completeTask(taskId, 'Demo');
+    return res.end();
+  }
+
+  try {
+    let full = '';
+    let meta = { role, taskId };
+    for await (const ev of streamRouteToLLM({
+      messages: history,
+      role,
+      model,
+      provider,
+      clientKeys,
+      roleModels: mergedRoleModels,
+    })) {
+      if (req.aborted) break;
+      if (ev.type === 'meta') {
+        meta = { ...meta, ...ev, taskId };
+        send({ type: 'meta', ...meta });
+      } else if (ev.type === 'delta') {
+        full += ev.delta;
+        send({ type: 'delta', delta: ev.delta });
+      } else if (ev.type === 'done') {
+        full = ev.content || full;
+        send({
+          type: 'done',
+          content: full,
+          model: ev.model || meta.model,
+          provider: meta.provider,
+          role: meta.role,
+          boardMember: meta.boardMember,
+          usage: ev.usage || {},
+          taskId,
+        });
+      }
+    }
+
+    if (full) {
+      history.push({ role: 'assistant', content: full });
+      trimHistory(sessionId, history);
+      if (taskId) await completeTask(taskId, `Streamed via ${meta.provider || 'llm'}`);
+      try {
+        await logSystemEvent(role, 'CHAT', `Streamed via ${meta.provider}/${meta.model}`);
+      } catch {
+        /* ignore */
+      }
+    } else if (taskId) {
+      await failTask(taskId, 'Empty stream');
+    }
+  } catch (err) {
+    console.error('[CHAT STREAM]', err.message);
+    if (taskId) await failTask(taskId, err.message);
+    if (isMissingKeyError(err.message)) {
+      const demo = demoResponse(role);
+      send({ type: 'meta', ...demo, taskId });
+      send({ type: 'delta', delta: demo.response });
+      send({ type: 'done', content: demo.response, taskId });
+    } else {
+      const msg = `Provider error:\n\n\`\`\`\n${err.message.slice(0, 800)}\n\`\`\``;
+      send({ type: 'error', error: err.message });
+      send({ type: 'delta', delta: msg });
+      send({ type: 'done', content: msg, error: true, taskId });
+    }
+  }
+
+  res.end();
+});
+
 router.post('/delegate', async (req, res) => {
   try {
     const { task, targetRole, roleModels = {} } = req.body || {};
@@ -148,11 +266,9 @@ router.post('/delegate', async (req, res) => {
     const mergedRoleModels = { ...DEFAULT_ROLE_MODELS, ...roleModels };
 
     let role = targetRole;
-    let reason = 'Explicitly assigned';
     if (!role) {
-      const assignment = await identifyBoardMember(task, { clientKeys, roleModels: mergedRoleModels });
-      role = assignment.role;
-      reason = assignment.reason;
+      const id = await identifyBoardMember(task, { clientKeys, roleModels: mergedRoleModels });
+      role = id.role;
     }
 
     const result = await routeToLLM({
@@ -164,33 +280,24 @@ router.post('/delegate', async (req, res) => {
 
     res.json({
       response: result.content,
-      delegatedTo: role,
-      reason,
+      role: result.role,
+      boardMember: result.boardMember,
       model: result.model,
       provider: result.provider,
-      usage: result.usage,
-      timestamp: new Date().toISOString(),
     });
   } catch (err) {
-    res.status(500).json({ error: 'Delegation failed', details: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
 router.get('/board', (req, res) => {
-  const clientKeys = extractClientKeys(req);
-  // role models from query optional JSON
   let roleModels = {};
-  if (req.query.roleModels) {
-    try {
-      roleModels = JSON.parse(String(req.query.roleModels));
-    } catch {
-      /* ignore */
-    }
+  try {
+    if (req.query.roleModels) roleModels = JSON.parse(String(req.query.roleModels));
+  } catch {
+    /* ignore */
   }
-  res.json({
-    members: getBoardMembers({ ...DEFAULT_ROLE_MODELS, ...roleModels }),
-    timestamp: new Date().toISOString(),
-  });
+  res.json({ members: getBoardMembers(roleModels) });
 });
 
 router.get('/status', (req, res) => {
@@ -199,43 +306,37 @@ router.get('/status', (req, res) => {
   for (const id of Object.keys(PROVIDERS)) {
     providerStatus[id] = !!resolveKey(id, clientKeys);
   }
-  const any = Object.values(providerStatus).some(Boolean);
   res.json({
     status: 'operational',
     platform: 'AI Boardroom',
-    version: '2.0.0',
+    version: '2.1.0',
     primaryProvider: 'nvidia',
     providers: providerStatus,
     nvidiaConfigured: providerStatus.nvidia,
-    openRouterConfigured: providerStatus.openrouter,
-    geminiConfigured: providerStatus.google,
-    openaiConfigured: providerStatus.openai,
-    xaiConfigured: providerStatus.xai,
-    anthropicConfigured: providerStatus.anthropic,
-    apiKeyConfigured: any,
-    voiceEnabled: !!(env('GEMINI_API_KEY') || env('OPENAI_API_KEY') || env('XAI_API_KEY')),
-    vaultPath: env('OBSIDIAN_VAULT_PATH', './obsidian_vault'),
-    boardMembers: getBoardMembers().length,
-    activeSessions: conversations.size,
-    demoMode: !any,
-    timestamp: new Date().toISOString(),
+    apiKeyConfigured: Object.values(providerStatus).some(Boolean),
+    demoMode: !Object.values(providerStatus).some(Boolean),
+    authRequired: authEnabled(),
+    features: {
+      streaming: true,
+      voice: true,
+      vault: true,
+      canvas: true,
+      mindmap: true,
+      agentMonitor: true,
+    },
   });
 });
 
 router.get('/paperclip/agents', (_req, res) => {
-  res.json({ agents: getAllAgents(), timestamp: new Date().toISOString() });
+  res.json({ agents: getAllAgents() });
 });
 
 router.get('/paperclip/tasks', (_req, res) => {
-  const tasks = Array.from(taskHistory.values());
-  res.json({ tasks, totalTasks: tasks.length, timestamp: new Date().toISOString() });
+  res.json({ tasks: listTasks(40) });
 });
 
-router.get('/paperclip/tasks/:taskId', async (req, res) => {
-  const task = taskHistory.get(req.params.taskId);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  const status = await getTaskStatus(req.params.taskId);
-  res.json({ task, status, timestamp: new Date().toISOString() });
+router.get('/paperclip/tasks/:id', async (req, res) => {
+  res.json(await getTaskStatus(req.params.id));
 });
 
 export default router;

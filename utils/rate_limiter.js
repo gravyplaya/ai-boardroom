@@ -1,55 +1,49 @@
 /**
- * rate_limiter.js — Lightweight in-memory rate limiting.
- * Serverless-safe: no setInterval (cleanup is opportunistic).
+ * rate_limiter.js — In-memory sliding window (best-effort; not multi-instance)
  */
 
-const WINDOW_MS = 15 * 60 * 1000;
-const MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX) > 0
-  ? Number(process.env.RATE_LIMIT_MAX)
-  : 1000;
+const WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000);
+const MAX = Number(process.env.RATE_LIMIT_MAX || 300); // tighter default
+const buckets = new Map();
 
-const clients = new Map();
-
-// Don't rate-limit health / static-ish status endpoints
-const SKIP = new Set(['/api/status', '/api/board', '/health', '/api/voice/status']);
-
-function prune(now) {
-  if (clients.size < 500) return;
-  for (const [ip, data] of clients.entries()) {
-    if (now > data.resetAt) clients.delete(ip);
+function clientIp(req) {
+  // Prefer right-most X-Forwarded-For when behind a single trusted proxy
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.length) {
+    const parts = xff.split(',').map((s) => s.trim()).filter(Boolean);
+    return parts[parts.length - 1] || req.socket?.remoteAddress || 'unknown';
   }
+  return req.socket?.remoteAddress || req.ip || 'unknown';
 }
 
 export function rateLimiter(req, res, next) {
-  const path = (req.path || req.url || '').split('?')[0];
-  if (SKIP.has(path) || req.method === 'OPTIONS') {
+  const path = req.path || '';
+  if (path === '/health' || path === '/api/status' || path.endsWith('/status')) {
     return next();
   }
 
-  const ip =
-    req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() ||
-    req.ip ||
-    'unknown';
+  const key = clientIp(req);
   const now = Date.now();
-  prune(now);
+  let bucket = buckets.get(key);
+  if (!bucket || now - bucket.start > WINDOW_MS) {
+    bucket = { start: now, count: 0 };
+    buckets.set(key, bucket);
+  }
+  bucket.count += 1;
 
-  let data = clients.get(ip);
-  if (!data || now > data.resetAt) {
-    data = { count: 1, resetAt: now + WINDOW_MS };
-    clients.set(ip, data);
-    return next();
+  // Prevent unbounded growth
+  if (buckets.size > 5000) {
+    const first = buckets.keys().next().value;
+    buckets.delete(first);
   }
 
-  data.count += 1;
-  if (data.count > MAX_REQUESTS) {
-    res.setHeader('Retry-After', String(Math.ceil((data.resetAt - now) / 1000)));
-    return res.status(429).json({
-      error: 'Too Many Requests',
-      message: 'Request limit exceeded. Please try again later.',
-    });
-  }
+  res.setHeader('X-RateLimit-Limit', String(MAX));
+  res.setHeader('X-RateLimit-Remaining', String(Math.max(0, MAX - bucket.count)));
 
-  return next();
+  if (bucket.count > MAX) {
+    return res.status(429).json({ error: 'Too many requests', retryAfterMs: WINDOW_MS });
+  }
+  next();
 }
 
-export default { rateLimiter };
+export default rateLimiter;

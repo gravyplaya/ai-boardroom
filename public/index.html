@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#07080c">
-  <title>AI Boardroom — JARVIS Interface</title>
+  <title>AI Boardroom</title>
   <meta name="description" content="AI Boardroom: A production multi-agent platform where autonomous AI agents build, deploy, and test real software.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,8 +24,9 @@
     <div class="ambient-orb ambient-orb--2"></div>
     <div class="ambient-orb ambient-orb--3"></div>
   </div>
-  <div class="scan-line"></div>
+  <div class="scan-line" hidden></div>
 
+  <div id="ariaLive" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <div id="app">
     <!-- ── Header ────────────────────────────────────────── -->
     <header id="header">
@@ -159,7 +160,7 @@
               <canvas id="composerWave" class="composer-wave"></canvas>
             </div>
             <div class="composer-top">
-              <button type="button" class="input-role" id="inputRole" title="Change active agent">
+              <button type="button" class="input-role" id="inputRole" title="Change active agent" aria-haspopup="listbox" aria-expanded="false" role="button">
                 <span class="role-dot" data-role="jarvis"></span>
                 <span class="role-name">JARVIS</span>
               </button>
@@ -171,13 +172,13 @@
               <span class="meta-model" id="metaModel"></span>
             </div>
             <div class="input-wrapper composer-main">
-              <button class="attach-btn" id="attachBtn" title="Attach local files (device only — not Google Drive)" type="button">
+              <button class="attach-btn" id="attachBtn" title="Attach local files (device only — not Google Drive)" type="button" aria-label="Attach files">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
                 </svg>
               </button>
               <textarea id="chatInput" placeholder="Directive for the Board…" rows="1" autofocus></textarea>
-              <button class="voice-btn" id="voiceBtn" title="Voice Mode" type="button">
+              <button class="voice-btn" id="voiceBtn" title="Voice Mode" type="button" aria-label="Start voice">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
                   <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -186,7 +187,7 @@
                 </svg>
                 <div class="voice-pulse"></div>
               </button>
-              <button class="send-btn" id="sendBtn" disabled type="button">
+              <button class="send-btn" id="sendBtn" disabled type="button" aria-label="Send message">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
                 </svg>
