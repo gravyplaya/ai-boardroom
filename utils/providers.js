@@ -162,9 +162,10 @@ export const VOICE_PROVIDERS = {
   },
   xai: {
     id: 'xai',
-    name: 'Grok Voice',
+    name: 'Grok Voice Agent',
     envKey: 'XAI_API_KEY',
-    description: 'xAI Grok realtime voice',
+    description: 'xAI Speech-to-Speech · tools · web/X search · MCP',
+    primary: true,
   },
 };
 

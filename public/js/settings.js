@@ -1,9 +1,55 @@
 /**
- * settings.js — Provider keys, model catalog, per-role assignment, voice provider
- * Keys stay in localStorage; sent to API as X-Provider-Keys base64 header.
+ * settings.js — Provider keys, models, Grok Voice Agent full suite
+ * Keys + voiceAgent config stay in localStorage.
  */
 
 const STORAGE_KEY = 'ai_boardroom_settings_v2';
+
+const DEFAULT_VOICE_AGENT = {
+  provider: 'xai',
+  model: 'grok-voice-latest',
+  voice: 'eve',
+  customVoiceId: '',
+  instructions: '',
+  reasoningEffort: 'high',
+  outputSpeed: 1.0,
+  languageHint: 'en',
+  greetOnConnect: true,
+  greetText: 'Hello Sir — Boardroom voice online. How can I help?',
+  vadEnabled: true,
+  vadThreshold: 0.85,
+  silenceDurationMs: 700,
+  prefixPaddingMs: 333,
+  idleTimeoutMs: 0,
+  sampleRate: 24000,
+  tools: {
+    webSearch: true,
+    xSearch: true,
+    fileSearch: false,
+    boardroomFunctions: true,
+  },
+  webSearch: {
+    allowedDomains: '',
+    excludedDomains: '',
+    enableImageUnderstanding: true,
+    country: '',
+    city: '',
+  },
+  xSearch: {
+    allowedHandles: '',
+    excludedHandles: '',
+    fromDate: '',
+    toDate: '',
+    enableImageUnderstanding: true,
+    enableVideoUnderstanding: false,
+  },
+  fileSearch: {
+    vectorStoreIds: '',
+    maxNumResults: 8,
+  },
+  mcpServers: [],
+  replaceMap: '',
+};
 
 const DEFAULTS = {
   providerKeys: {
@@ -15,16 +61,30 @@ const DEFAULTS = {
     xai: '',
   },
   roleModels: {},
-  voiceProvider: 'gemini',
+  voiceProvider: 'xai',
   globalProvider: 'nvidia',
   globalModel: '',
+  voiceAgent: structuredClone(DEFAULT_VOICE_AGENT),
 };
 
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return structuredClone(DEFAULTS);
-    return { ...structuredClone(DEFAULTS), ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    return {
+      ...structuredClone(DEFAULTS),
+      ...parsed,
+      providerKeys: { ...DEFAULTS.providerKeys, ...(parsed.providerKeys || {}) },
+      voiceAgent: {
+        ...structuredClone(DEFAULT_VOICE_AGENT),
+        ...(parsed.voiceAgent || {}),
+        tools: { ...DEFAULT_VOICE_AGENT.tools, ...(parsed.voiceAgent?.tools || {}) },
+        webSearch: { ...DEFAULT_VOICE_AGENT.webSearch, ...(parsed.voiceAgent?.webSearch || {}) },
+        xSearch: { ...DEFAULT_VOICE_AGENT.xSearch, ...(parsed.voiceAgent?.xSearch || {}) },
+        fileSearch: { ...DEFAULT_VOICE_AGENT.fileSearch, ...(parsed.voiceAgent?.fileSearch || {}) },
+      },
+    };
   } catch {
     return structuredClone(DEFAULTS);
   }
@@ -108,6 +168,33 @@ async function initSettings() {
       if (status) status.textContent = e.message;
     }
   });
+
+  document.getElementById('settingsTestVoice')?.addEventListener('click', async () => {
+    const state = collectForm();
+    save(state);
+    const status = document.getElementById('settingsStatus');
+    if (status) status.textContent = 'Requesting xAI voice token…';
+    try {
+      const res = await fetch('/api/voice/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getProviderKeysHeader() },
+        body: JSON.stringify({
+          provider: state.voiceProvider || 'xai',
+          voiceAgent: state.voiceAgent,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (status) {
+          status.textContent = `Voice OK · ${data.provider} · ${data.model || data.protocol}`;
+        }
+      } else if (status) {
+        status.textContent = `Voice fail: ${data.message || data.error}`;
+      }
+    } catch (e) {
+      if (status) status.textContent = e.message;
+    }
+  });
 }
 
 function collectForm() {
@@ -133,6 +220,64 @@ function collectForm() {
     const [provider, ...rest] = val.split('::');
     state.roleModels[role] = { provider, model: rest.join('::') };
   });
+
+  // Voice agent suite
+  const va = state.voiceAgent || structuredClone(DEFAULT_VOICE_AGENT);
+  const g = (id) => document.getElementById(id);
+  if (g('va_model')) va.model = g('va_model').value;
+  if (g('va_voice')) va.voice = g('va_voice').value;
+  if (g('va_customVoiceId')) va.customVoiceId = g('va_customVoiceId').value.trim();
+  if (g('va_instructions')) va.instructions = g('va_instructions').value;
+  if (g('va_reasoningEffort')) va.reasoningEffort = g('va_reasoningEffort').value;
+  if (g('va_outputSpeed')) va.outputSpeed = Number(g('va_outputSpeed').value) || 1;
+  if (g('va_languageHint')) va.languageHint = g('va_languageHint').value.trim() || 'en';
+  if (g('va_greetOnConnect')) va.greetOnConnect = g('va_greetOnConnect').checked;
+  if (g('va_greetText')) va.greetText = g('va_greetText').value;
+  if (g('va_vadEnabled')) va.vadEnabled = g('va_vadEnabled').checked;
+  if (g('va_vadThreshold')) va.vadThreshold = Number(g('va_vadThreshold').value);
+  if (g('va_silenceDurationMs')) va.silenceDurationMs = Number(g('va_silenceDurationMs').value);
+  if (g('va_prefixPaddingMs')) va.prefixPaddingMs = Number(g('va_prefixPaddingMs').value);
+  if (g('va_idleTimeoutMs')) va.idleTimeoutMs = Number(g('va_idleTimeoutMs').value);
+  if (g('va_sampleRate')) va.sampleRate = Number(g('va_sampleRate').value);
+
+  va.tools = va.tools || {};
+  if (g('va_tool_web')) va.tools.webSearch = g('va_tool_web').checked;
+  if (g('va_tool_x')) va.tools.xSearch = g('va_tool_x').checked;
+  if (g('va_tool_file')) va.tools.fileSearch = g('va_tool_file').checked;
+  if (g('va_tool_board')) va.tools.boardroomFunctions = g('va_tool_board').checked;
+
+  va.webSearch = va.webSearch || {};
+  if (g('va_ws_allowed')) va.webSearch.allowedDomains = g('va_ws_allowed').value;
+  if (g('va_ws_excluded')) va.webSearch.excludedDomains = g('va_ws_excluded').value;
+  if (g('va_ws_images')) va.webSearch.enableImageUnderstanding = g('va_ws_images').checked;
+  if (g('va_ws_country')) va.webSearch.country = g('va_ws_country').value.trim();
+  if (g('va_ws_city')) va.webSearch.city = g('va_ws_city').value.trim();
+
+  va.xSearch = va.xSearch || {};
+  if (g('va_xs_allowed')) va.xSearch.allowedHandles = g('va_xs_allowed').value;
+  if (g('va_xs_excluded')) va.xSearch.excludedHandles = g('va_xs_excluded').value;
+  if (g('va_xs_from')) va.xSearch.fromDate = g('va_xs_from').value;
+  if (g('va_xs_to')) va.xSearch.toDate = g('va_xs_to').value;
+  if (g('va_xs_images')) va.xSearch.enableImageUnderstanding = g('va_xs_images').checked;
+  if (g('va_xs_video')) va.xSearch.enableVideoUnderstanding = g('va_xs_video').checked;
+
+  va.fileSearch = va.fileSearch || {};
+  if (g('va_fs_ids')) va.fileSearch.vectorStoreIds = g('va_fs_ids').value;
+  if (g('va_fs_max')) va.fileSearch.maxNumResults = Number(g('va_fs_max').value) || 8;
+
+  if (g('va_mcp_json')) {
+    try {
+      const raw = g('va_mcp_json').value.trim();
+      va.mcpServers = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(va.mcpServers)) va.mcpServers = [];
+    } catch {
+      /* keep previous */
+    }
+  }
+  if (g('va_replaceMap')) va.replaceMap = g('va_replaceMap').value;
+
+  va.provider = state.voiceProvider || 'xai';
+  state.voiceAgent = va;
   return state;
 }
 
@@ -142,11 +287,32 @@ async function renderSettings() {
   if (!body) return;
 
   let catalog = null;
+  let voiceOpts = null;
   try {
     const res = await apiFetch('/api/models');
     catalog = await res.json();
   } catch {
     catalog = { providers: [] };
+  }
+  try {
+    const res = await apiFetch('/api/voice/options');
+    voiceOpts = await res.json();
+  } catch {
+    voiceOpts = {
+      models: [
+        { id: 'grok-voice-latest', name: 'Grok Voice Latest' },
+        { id: 'grok-voice-think-fast-2.0', name: 'Think Fast 2.0' },
+        { id: 'grok-voice-think-fast-1.0', name: 'Think Fast 1.0' },
+      ],
+      voices: [
+        { id: 'eve', name: 'Eve' },
+        { id: 'ara', name: 'Ara' },
+        { id: 'rex', name: 'Rex' },
+        { id: 'sal', name: 'Sal' },
+        { id: 'leo', name: 'Leo' },
+      ],
+      boardroomTools: [],
+    };
   }
 
   const providerBlocks = (catalog.providers || [])
@@ -158,12 +324,12 @@ async function renderSettings() {
           <div class="settings-card-head">
             <span class="settings-provider-dot" style="background:${p.color || '#888'}"></span>
             <div>
-              <strong>${p.name}${p.primary ? ' · Primary' : ''}</strong>
-              <p>${p.description || ''}</p>
+              <strong>${escapeHtml(p.name)}${p.primary ? ' · Primary' : ''}</strong>
+              <p>${escapeHtml(p.description || '')}</p>
             </div>
             <span class="settings-badge settings-badge--${badge}">${badge === 'ready' ? 'Keyed' : 'Empty'}</span>
           </div>
-          <label class="settings-label">API Key (${p.envKey || p.id})</label>
+          <label class="settings-label">API Key (${escapeHtml(p.envKey || p.id)})</label>
           <input class="settings-input" id="key_${p.id}" type="password" autocomplete="off"
             placeholder="Paste key — stored only in this browser"
             value="${escapeAttr(val)}" />
@@ -171,44 +337,9 @@ async function renderSettings() {
     })
     .join('');
 
-  const allModelOptions = (catalog.providers || [])
-    .flatMap((p) =>
-      (p.models || []).map(
-        (m) => `<option value="${p.id}::${m.id}">${p.name} · ${m.name || m.id}</option>`
-      )
-    )
-    .join('');
-
   const roles = [
-    'jarvis',
-    'architect',
-    'coder',
-    'creative',
-    'analyst',
-    'product',
-    'devops',
-    'security',
-    'qa',
+    'jarvis', 'architect', 'coder', 'creative', 'analyst', 'product', 'devops', 'security', 'qa',
   ];
-  const roleRows = roles
-    .map((role) => {
-      const pref = state.roleModels[role];
-      const current = pref ? `${pref.provider}::${pref.model}` : '';
-      return `
-        <div class="settings-role-row">
-          <span class="settings-role-name">${role}</span>
-          <select class="settings-select" data-role-model="${role}">
-            <option value="">Default (NVIDIA stack)</option>
-            ${allModelOptions.replace(
-              `value="${current}"`,
-              `value="${current}" selected`
-            )}
-          </select>
-        </div>`;
-    })
-    .join('');
-
-  // Fix selected attrs properly
   const roleRowsFixed = roles
     .map((role) => {
       const pref = state.roleModels[role];
@@ -217,13 +348,13 @@ async function renderSettings() {
         .flatMap((p) =>
           (p.models || []).map((m) => {
             const v = `${p.id}::${m.id}`;
-            return `<option value="${v}" ${v === current ? 'selected' : ''}>${p.name} · ${m.name || m.id}</option>`;
+            return `<option value="${escapeAttr(v)}" ${v === current ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(m.name || m.id)}</option>`;
           })
         )
         .join('');
       return `
         <div class="settings-role-row">
-          <span class="settings-role-name">${role}</span>
+          <span class="settings-role-name">${escapeHtml(role)}</span>
           <select class="settings-select" data-role-model="${role}">
             <option value="">Default (NVIDIA stack)</option>
             ${opts}
@@ -236,16 +367,37 @@ async function renderSettings() {
   const nvidiaOpts = nvidiaModels
     .map(
       (m) =>
-        `<option value="${m.id}" ${state.globalModel === m.id ? 'selected' : ''}>${m.name || m.id}</option>`
+        `<option value="${escapeAttr(m.id)}" ${state.globalModel === m.id ? 'selected' : ''}>${escapeHtml(m.name || m.id)}</option>`
     )
     .join('');
+
+  const va = state.voiceAgent || DEFAULT_VOICE_AGENT;
+  const modelOpts = (voiceOpts.models || [])
+    .map(
+      (m) =>
+        `<option value="${escapeAttr(m.id)}" ${va.model === m.id ? 'selected' : ''}>${escapeHtml(m.name || m.id)}</option>`
+    )
+    .join('');
+  const voiceOptsHtml = (voiceOpts.voices || [])
+    .map(
+      (v) =>
+        `<option value="${escapeAttr(v.id)}" ${va.voice === v.id ? 'selected' : ''}>${escapeHtml(v.name || v.id)}${v.note ? ' · ' + escapeHtml(v.note) : ''}</option>`
+    )
+    .join('');
+
+  const boardToolsList = (voiceOpts.boardroomTools || [])
+    .map((t) => `<li><code>${escapeHtml(t.name)}</code> — ${escapeHtml(t.description || '')}</li>`)
+    .join('');
+
+  const mcpJson = JSON.stringify(va.mcpServers || [], null, 2);
 
   body.innerHTML = `
     <section class="settings-section">
       <h3>Provider API Keys</h3>
-      <p class="settings-help">Keys stay in your browser. NVIDIA NIM is the primary stack. OpenRouter free models are used as automatic fallback.</p>
+      <p class="settings-help">Keys stay in your browser. <strong>xAI key</strong> powers Grok Voice Agent. NVIDIA NIM is the primary chat stack.</p>
       <div class="settings-grid">${providerBlocks}</div>
     </section>
+
     <section class="settings-section">
       <h3>Default chat model</h3>
       <div class="settings-inline">
@@ -263,29 +415,189 @@ async function renderSettings() {
         </select>
       </div>
     </section>
+
     <section class="settings-section">
       <h3>Board member models</h3>
       <div class="settings-roles">${roleRowsFixed}</div>
     </section>
-    <section class="settings-section">
-      <h3>Voice engine</h3>
+
+    <section class="settings-section settings-section--voice">
+      <h3>Grok Voice Agent</h3>
+      <p class="settings-help">Live speech-to-speech via <code>wss://api.x.ai/v1/realtime</code>. Browser uses short-lived ephemeral tokens — your xAI key never leaves the server handshake path.</p>
+
+      <label class="settings-label">Voice engine</label>
       <select class="settings-select" id="voiceProviderSelect">
-        <option value="gemini" ${state.voiceProvider === 'gemini' ? 'selected' : ''}>Gemini Live</option>
+        <option value="xai" ${state.voiceProvider === 'xai' ? 'selected' : ''}>Grok Voice Agent (xAI) · recommended</option>
         <option value="openai" ${state.voiceProvider === 'openai' ? 'selected' : ''}>ChatGPT Voice (Realtime)</option>
-        <option value="xai" ${state.voiceProvider === 'xai' ? 'selected' : ''}>Grok Voice</option>
+        <option value="gemini" ${state.voiceProvider === 'gemini' ? 'selected' : ''}>Gemini Live</option>
       </select>
+
+      <div class="settings-inline" style="margin-top:12px">
+        <div>
+          <label class="settings-label">Voice model</label>
+          <select class="settings-select" id="va_model">${modelOpts}</select>
+        </div>
+        <div>
+          <label class="settings-label">Voice persona</label>
+          <select class="settings-select" id="va_voice">${voiceOptsHtml}</select>
+        </div>
+      </div>
+
+      <label class="settings-label">Custom voice ID (optional — overrides persona)</label>
+      <input class="settings-input" id="va_customVoiceId" type="text" placeholder="voice_id from console.x.ai custom voices"
+        value="${escapeAttr(va.customVoiceId || '')}" />
+
+      <label class="settings-label">System prompt / instructions</label>
+      <textarea class="settings-input settings-textarea" id="va_instructions" rows="4"
+        placeholder="You are JARVIS, chief of staff…">${escapeHtml(va.instructions || '')}</textarea>
+
+      <div class="settings-inline">
+        <div>
+          <label class="settings-label">Reasoning effort</label>
+          <select class="settings-select" id="va_reasoningEffort">
+            <option value="high" ${va.reasoningEffort === 'high' ? 'selected' : ''}>High</option>
+            <option value="none" ${va.reasoningEffort === 'none' ? 'selected' : ''}>None</option>
+          </select>
+        </div>
+        <div>
+          <label class="settings-label">Speech speed (${va.outputSpeed || 1}×)</label>
+          <input class="settings-input" id="va_outputSpeed" type="number" min="0.7" max="1.5" step="0.05"
+            value="${escapeAttr(va.outputSpeed ?? 1)}" />
+        </div>
+        <div>
+          <label class="settings-label">Language hint</label>
+          <input class="settings-input" id="va_languageHint" type="text" value="${escapeAttr(va.languageHint || 'en')}" />
+        </div>
+        <div>
+          <label class="settings-label">Sample rate</label>
+          <select class="settings-select" id="va_sampleRate">
+            ${[16000, 24000, 48000]
+              .map(
+                (r) =>
+                  `<option value="${r}" ${(va.sampleRate || 24000) === r ? 'selected' : ''}>${r} Hz</option>`
+              )
+              .join('')}
+          </select>
+        </div>
+      </div>
+
+      <div class="settings-check-row">
+        <label class="settings-check"><input type="checkbox" id="va_greetOnConnect" ${va.greetOnConnect !== false ? 'checked' : ''}/> Greet on connect</label>
+      </div>
+      <label class="settings-label">Greeting prompt</label>
+      <input class="settings-input" id="va_greetText" type="text" value="${escapeAttr(va.greetText || '')}" />
+
+      <h4 class="settings-subhead">Turn detection (server VAD)</h4>
+      <div class="settings-check-row">
+        <label class="settings-check"><input type="checkbox" id="va_vadEnabled" ${va.vadEnabled !== false ? 'checked' : ''}/> Enable server VAD (auto turn-taking)</label>
+      </div>
+      <div class="settings-inline">
+        <div>
+          <label class="settings-label">VAD threshold (0.1–0.9)</label>
+          <input class="settings-input" id="va_vadThreshold" type="number" min="0.1" max="0.9" step="0.05" value="${escapeAttr(va.vadThreshold ?? 0.85)}" />
+        </div>
+        <div>
+          <label class="settings-label">Silence duration (ms)</label>
+          <input class="settings-input" id="va_silenceDurationMs" type="number" min="0" max="10000" step="50" value="${escapeAttr(va.silenceDurationMs ?? 700)}" />
+        </div>
+        <div>
+          <label class="settings-label">Prefix padding (ms)</label>
+          <input class="settings-input" id="va_prefixPaddingMs" type="number" min="0" max="10000" step="10" value="${escapeAttr(va.prefixPaddingMs ?? 333)}" />
+        </div>
+        <div>
+          <label class="settings-label">Idle timeout (ms, 0=off)</label>
+          <input class="settings-input" id="va_idleTimeoutMs" type="number" min="0" max="120000" step="500" value="${escapeAttr(va.idleTimeoutMs ?? 0)}" />
+        </div>
+      </div>
+
+      <h4 class="settings-subhead">Built-in connectors & tools</h4>
+      <div class="settings-check-grid">
+        <label class="settings-check"><input type="checkbox" id="va_tool_web" ${va.tools?.webSearch !== false ? 'checked' : ''}/> Web Search</label>
+        <label class="settings-check"><input type="checkbox" id="va_tool_x" ${va.tools?.xSearch !== false ? 'checked' : ''}/> X Search</label>
+        <label class="settings-check"><input type="checkbox" id="va_tool_file" ${va.tools?.fileSearch ? 'checked' : ''}/> Collections / File Search</label>
+        <label class="settings-check"><input type="checkbox" id="va_tool_board" ${va.tools?.boardroomFunctions !== false ? 'checked' : ''}/> Boardroom functions</label>
+      </div>
+
+      <h4 class="settings-subhead">Web Search options</h4>
+      <div class="settings-inline">
+        <div>
+          <label class="settings-label">Allowed domains (comma)</label>
+          <input class="settings-input" id="va_ws_allowed" value="${escapeAttr(va.webSearch?.allowedDomains || '')}" placeholder="example.com" />
+        </div>
+        <div>
+          <label class="settings-label">Excluded domains</label>
+          <input class="settings-input" id="va_ws_excluded" value="${escapeAttr(va.webSearch?.excludedDomains || '')}" />
+        </div>
+        <div>
+          <label class="settings-label">Country</label>
+          <input class="settings-input" id="va_ws_country" value="${escapeAttr(va.webSearch?.country || '')}" placeholder="US" />
+        </div>
+        <div>
+          <label class="settings-label">City</label>
+          <input class="settings-input" id="va_ws_city" value="${escapeAttr(va.webSearch?.city || '')}" />
+        </div>
+      </div>
+      <label class="settings-check"><input type="checkbox" id="va_ws_images" ${va.webSearch?.enableImageUnderstanding !== false ? 'checked' : ''}/> Image understanding in web results</label>
+
+      <h4 class="settings-subhead">X Search options</h4>
+      <div class="settings-inline">
+        <div>
+          <label class="settings-label">Allowed handles</label>
+          <input class="settings-input" id="va_xs_allowed" value="${escapeAttr(va.xSearch?.allowedHandles || '')}" placeholder="xai, elonmusk" />
+        </div>
+        <div>
+          <label class="settings-label">Excluded handles</label>
+          <input class="settings-input" id="va_xs_excluded" value="${escapeAttr(va.xSearch?.excludedHandles || '')}" />
+        </div>
+        <div>
+          <label class="settings-label">From date</label>
+          <input class="settings-input" id="va_xs_from" type="date" value="${escapeAttr(va.xSearch?.fromDate || '')}" />
+        </div>
+        <div>
+          <label class="settings-label">To date</label>
+          <input class="settings-input" id="va_xs_to" type="date" value="${escapeAttr(va.xSearch?.toDate || '')}" />
+        </div>
+      </div>
+      <div class="settings-check-row">
+        <label class="settings-check"><input type="checkbox" id="va_xs_images" ${va.xSearch?.enableImageUnderstanding !== false ? 'checked' : ''}/> Image understanding</label>
+        <label class="settings-check"><input type="checkbox" id="va_xs_video" ${va.xSearch?.enableVideoUnderstanding ? 'checked' : ''}/> Video understanding</label>
+      </div>
+
+      <h4 class="settings-subhead">Collections / File Search</h4>
+      <label class="settings-label">Vector store / collection IDs (comma-separated)</label>
+      <input class="settings-input" id="va_fs_ids" value="${escapeAttr(va.fileSearch?.vectorStoreIds || '')}" placeholder="collection_…" />
+      <label class="settings-label">Max results</label>
+      <input class="settings-input" id="va_fs_max" type="number" min="1" max="50" value="${escapeAttr(va.fileSearch?.maxNumResults ?? 8)}" />
+
+      <h4 class="settings-subhead">Remote MCP connectors</h4>
+      <p class="settings-help">JSON array of MCP servers. Each: <code>server_url</code>, <code>server_label</code>, optional <code>authorization</code>, <code>allowed_tools</code>, <code>headers</code>.</p>
+      <textarea class="settings-input settings-textarea settings-mono" id="va_mcp_json" rows="6">${escapeHtml(mcpJson)}</textarea>
+
+      <h4 class="settings-subhead">Pronunciation replace map</h4>
+      <p class="settings-help">One per line: <code>phrase=spoken form</code></p>
+      <textarea class="settings-input settings-textarea settings-mono" id="va_replaceMap" rows="3">${escapeHtml(va.replaceMap || '')}</textarea>
+
+      <h4 class="settings-subhead">Boardroom function tools</h4>
+      <ul class="settings-tool-list">${boardToolsList || '<li>read_file, write_file, execute_cli_command, consult_board, vault_*, …</li>'}</ul>
     </section>
   `;
 }
 
 function escapeAttr(s) {
-  return String(s || '')
+  return String(s ?? '')
     .replace(/&/g, '&')
     .replace(/"/g, '"')
     .replace(/</g, '<');
 }
 
-// auto-init if DOM ready
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/"/g, '"');
+}
+
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => initSettings());
 } else {

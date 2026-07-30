@@ -3267,3 +3267,78 @@ textarea#chatInput,
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
 }
+
+/* ── Voice agent settings + live tool log ───────────────────────────────── */
+.settings-section--voice .settings-subhead {
+  margin: 18px 0 8px;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+}
+.settings-textarea {
+  min-height: 88px;
+  resize: vertical;
+  line-height: 1.45;
+  font-family: inherit;
+}
+.settings-mono {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+.settings-check-row,
+.settings-check-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin: 8px 0 12px;
+}
+.settings-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  min-height: 36px;
+}
+.settings-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-cyan);
+}
+.settings-tool-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+.settings-tool-list code {
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+.voice-tool-log {
+  margin-top: 10px;
+  max-height: 96px;
+  overflow-y: auto;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+.voice-tool-row {
+  margin-bottom: 4px;
+  line-height: 1.35;
+}
+.voice-tool-kind {
+  color: var(--accent-cyan);
+  font-weight: 600;
+  margin-right: 4px;
+}
+.voice-widget-title {
+  letter-spacing: 0.06em;
+}
