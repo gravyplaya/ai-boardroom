@@ -10,12 +10,13 @@ import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 import { getSystemInstructionForTools } from './agent_tools.js';
 import { processToolCalls, hasToolCalls, extractText, buildToolResultMessage } from './tool_executor.js';
+import { env } from './env.js';
 dotenv.config({ quiet: true });
 
 // ── Board Member Model Configuration ────────────────────────────────────────
 const BOARD_MODELS = {
   jarvis: {
-    model: process.env.MODEL_JARVIS || 'gemini-3.1-pro-preview',
+    model: env('MODEL_JARVIS') || 'gemini-3.1-pro-preview',
     fallbackModel: 'nvidia/llama-3.1-nemotron-70b-instruct:free',
     description: 'Chief of Staff — fast, conversational, task routing',
     systemPrompt: `You are JARVIS, the Chief of Staff of AI Boardroom — a real production platform where autonomous AI agents build, deploy, and test real software. You are the sole interface between the human stakeholder and the Board of Directors.
@@ -34,7 +35,7 @@ When the user gives a directive, identify which Board Member(s) should handle it
   },
 
   architect: {
-    model: process.env.MODEL_CEO || 'gemini-3.1-pro-preview',
+    model: env('MODEL_CEO') || 'gemini-3.1-pro-preview',
     fallbackModel: 'anthropic/claude-3-opus:beta',
     description: 'CEO / Architect — high-level strategy, system design, project planning',
     systemPrompt: `You are The Architect, the CEO of AI Boardroom. You handle high-level strategy and system design.
@@ -51,7 +52,7 @@ You think in systems. Every decision must be justified with clear reasoning. Out
   },
 
   coder: {
-    model: process.env.MODEL_CTO || 'gemini-3.1-pro-preview',
+    model: env('MODEL_CTO') || 'gemini-3.1-pro-preview',
     fallbackModel: 'anthropic/claude-3.5-sonnet:beta',
     description: 'CTO / Coder — engineering, implementation, deployment',
     systemPrompt: `You are The Coder, the CTO of AI Boardroom. You handle all engineering and implementation.
@@ -129,7 +130,7 @@ ${getSystemInstructionForTools('coder')}`,
   },
 
   creative: {
-    model: process.env.MODEL_CMO || 'gemini-3.1-flash-preview',
+    model: env('MODEL_CMO') || 'gemini-3.1-flash-preview',
     fallbackModel: 'google/gemini-pro-1.5',
     description: 'CMO / Creative — design, copywriting, marketing, branding',
     systemPrompt: `You are The Creative, the CMO of AI Boardroom. You handle all design, copywriting, and marketing.
@@ -146,7 +147,7 @@ You think visually. Your output should be specific and implementable — color c
   },
 
   analyst: {
-    model: process.env.MODEL_CFO || 'gemini-3.1-flash-lite-preview',
+    model: env('MODEL_CFO') || 'gemini-3.1-flash-lite-preview',
     fallbackModel: 'meta-llama/llama-3-70b-instruct',
     description: 'CFO / Analyst — research, data, fact-checking, market analysis',
     systemPrompt: `You are The Analyst, the CFO/Researcher of AI Boardroom. You handle data gathering, market research, and fact-checking.
@@ -315,7 +316,8 @@ You are the final gate. If it's not perfect, it doesn't ship.`,
   },
 };
 
-const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
+const GEMINI_KEY = env('GEMINI_API_KEY');
+const ai = GEMINI_KEY ? new GoogleGenAI({ apiKey: GEMINI_KEY }) : null;
 
 // ── Core Router Function ────────────────────────────────────────────────────
 
@@ -364,16 +366,41 @@ async function routeViaGemini({ prompt, messages, boardMember, role, temperature
     config.tools = boardMember.tools;
   }
 
-  const m = model || boardMember.model;
+  // Prefer requested model, then board default, then stable Gemini fallbacks
+  const modelCandidates = [
+    model,
+    boardMember.model,
+    env('GEMINI_FALLBACK_MODEL', 'gemini-2.5-flash'),
+    'gemini-2.0-flash',
+    'gemini-flash-latest',
+  ].filter(Boolean);
+  // de-dupe
+  const seen = new Set();
+  const models = modelCandidates.filter((m) => (seen.has(m) ? false : (seen.add(m), true)));
+
+  let m = models[0];
   const maxToolLoops = 5; // Prevent infinite loops
   let loopCount = 0;
+  let modelIndex = 0;
 
   while (loopCount < maxToolLoops) {
-    const response = await ai.models.generateContent({
-      model: m,
-      contents: conversationMessages,
-      config: config
-    });
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model: m,
+        contents: conversationMessages,
+        config: config
+      });
+    } catch (err) {
+      // Model not found / unavailable → try next candidate
+      if (modelIndex < models.length - 1 && /not found|NOT_FOUND|invalid model|404/i.test(err.message || '')) {
+        modelIndex += 1;
+        m = models[modelIndex];
+        console.warn(`[LLM] Model switch → ${m} (${err.message})`);
+        continue;
+      }
+      throw err;
+    }
 
     console.log(`[GEMINI LOOP ${loopCount}] Response type:`, typeof response, 'has text:', !!response.text, 'has candidates:', !!response.candidates);
 
@@ -429,7 +456,7 @@ function buildGeminiContents(prompt, messages) {
 }
 
 async function routeViaOpenRouter({ prompt, messages, boardMember, role, temperature, model }) {
-  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const openRouterKey = env('OPENROUTER_API_KEY');
   if (!openRouterKey) {
     throw new Error('Neither GEMINI_API_KEY nor OPENROUTER_API_KEY is working. Check your .env file.');
   }

@@ -7,6 +7,7 @@ import { Router } from 'express';
 import { routeToLLM, getBoardMembers, identifyBoardMember } from '../utils/llm_router.js';
 import { logSystemEvent } from '../utils/vault.js';
 import { orchestrateMessage, getTaskStatus, getAllAgents } from '../utils/paperclip_orchestration.js';
+import { env } from '../utils/env.js';
 
 const router = Router();
 
@@ -65,7 +66,7 @@ router.post('/chat', async (req, res) => {
     history.push({ role: 'user', content: message });
 
     // No keys at all → instant demo (no external call)
-    if (!process.env.GEMINI_API_KEY && !process.env.OPENROUTER_API_KEY) {
+    if (!env('GEMINI_API_KEY') && !env('OPENROUTER_API_KEY')) {
       const demo = demoResponse(role);
       history.push({ role: 'assistant', content: demo.response });
       return res.json(demo);
@@ -174,17 +175,17 @@ router.get('/board', (_req, res) => {
 
 // ── GET /api/status ─────────────────────────────────────────────────────────
 router.get('/status', (_req, res) => {
-  const openRouterConfigured = !!process.env.OPENROUTER_API_KEY;
-  const geminiConfigured = !!process.env.GEMINI_API_KEY;
+  const openRouterConfigured = !!env('OPENROUTER_API_KEY');
+  const geminiConfigured = !!env('GEMINI_API_KEY');
   res.json({
     status: 'operational',
     platform: 'AI Boardroom',
-    version: '1.1.0',
+    version: '1.1.1',
     openRouterConfigured,
     apiKeyConfigured: openRouterConfigured || geminiConfigured,
     geminiConfigured,
     voiceEnabled: geminiConfigured,
-    vaultPath: process.env.OBSIDIAN_VAULT_PATH || './obsidian_vault',
+    vaultPath: env('OBSIDIAN_VAULT_PATH', './obsidian_vault'),
     boardMembers: getBoardMembers().length,
     activeSessions: conversations.size,
     demoMode: !openRouterConfigured && !geminiConfigured,

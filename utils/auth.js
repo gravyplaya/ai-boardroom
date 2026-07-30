@@ -6,9 +6,10 @@
  */
 
 import dotenv from 'dotenv';
+import { env } from './env.js';
 dotenv.config({ quiet: true });
 
-const API_KEY = process.env.BOARDROOM_API_KEY;
+const API_KEY = env('BOARDROOM_API_KEY');
 
 export function requireAuth(req, res, next) {
   if (!API_KEY) {

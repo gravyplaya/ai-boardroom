@@ -5,9 +5,10 @@
 import fs from 'fs/promises';
 import path from 'path';
 import dotenv from 'dotenv';
+import { env } from './env.js';
 dotenv.config({ quiet: true });
 
-const VAULT_PATH = path.resolve(process.env.OBSIDIAN_VAULT_PATH || './obsidian_vault');
+const VAULT_PATH = path.resolve(env('OBSIDIAN_VAULT_PATH', './obsidian_vault'));
 
 function safeJoin(relPath) {
   if (!relPath || typeof relPath !== 'string') throw new Error('Invalid vault path');

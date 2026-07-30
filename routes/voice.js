@@ -9,11 +9,12 @@
 
 import { Router } from 'express';
 import dotenv from 'dotenv';
+import { env } from '../utils/env.js';
 dotenv.config({ quiet: true });
 
 const router = Router();
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_API_KEY = env('GEMINI_API_KEY');
 
 // ── POST /api/voice/token ───────────────────────────────────────────────────
 router.post('/token', async (req, res) => {
@@ -31,7 +32,7 @@ router.post('/token', async (req, res) => {
   try {
     const fs = await import('fs/promises');
     const path = await import('path');
-    const vaultPath = process.env.OBSIDIAN_VAULT_PATH || './obsidian_vault';
+    const vaultPath = env('OBSIDIAN_VAULT_PATH', './obsidian_vault');
     
     try { systemLogs = await fs.readFile(path.join(vaultPath, '00_system_logs.md'), 'utf-8'); } catch (e) {}
     try { activeProjects = await fs.readFile(path.join(vaultPath, '01_active_projects.md'), 'utf-8'); } catch (e) {}

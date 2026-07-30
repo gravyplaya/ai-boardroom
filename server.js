@@ -22,6 +22,7 @@ import executionRoutes from './routes/execution.js';
 import { requireAuth } from './utils/auth.js';
 import { rateLimiter } from './utils/rate_limiter.js';
 import { logSystemEvent } from './utils/vault.js';
+import { env } from './utils/env.js';
 
 dotenv.config({ quiet: true });
 
@@ -36,7 +37,7 @@ const IS_VERCEL = process.env.VERCEL === '1' || !!process.env.VERCEL_ENV;
 // Empty ALLOWED_ORIGINS = allow all (needed for same-origin + preview).
 // Set ALLOWED_ORIGINS=https://your-domain.com,https://other.com to lock down.
 function buildCorsOrigin() {
-  const raw = (process.env.ALLOWED_ORIGINS || '').trim();
+  const raw = (env('ALLOWED_ORIGINS', '') || '').trim();
   if (!raw || raw === '*') return true;
   const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
   return (origin, callback) => {
@@ -110,8 +111,8 @@ async function start() {
     console.log('  ╔══════════════════════════════════════════════════╗');
     console.log('  ║              AI BOARDROOM — JARVIS               ║');
     console.log(`  ║  Server:  http://0.0.0.0:${PORT}                     ║`);
-    console.log(`  ║  OpenRouter: ${process.env.OPENROUTER_API_KEY ? 'configured' : 'demo mode'}                       ║`);
-    console.log(`  ║  Gemini:     ${process.env.GEMINI_API_KEY ? 'configured' : 'not set'}                       ║`);
+    console.log(`  ║  OpenRouter: ${env('OPENROUTER_API_KEY') ? 'configured' : 'demo mode'}                       ║`);
+    console.log(`  ║  Gemini:     ${env('GEMINI_API_KEY') ? 'configured' : 'not set'}                       ║`);
     console.log('  ╚══════════════════════════════════════════════════╝');
     console.log('');
     try {
