@@ -57,6 +57,7 @@ async function api(url, options = {}) {
 function init() {
   setGreeting();
   setupEventListeners();
+  initMobileChrome();
   initWaveform();
   checkSystemStatus();
   loadBoardMembers();
@@ -66,6 +67,10 @@ function init() {
     checkSystemStatus();
     loadBoardMembers();
   });
+  window.addEventListener('resize', () => {
+    document.documentElement.style.setProperty('--app-vh', `${window.innerHeight * 0.01}px`);
+  });
+  document.documentElement.style.setProperty('--app-vh', `${window.innerHeight * 0.01}px`);
 }
 
 function setGreeting() {
@@ -118,8 +123,17 @@ function setupEventListeners() {
     e.stopPropagation();
     if (!roleSelector) return;
     const rect = inputRole.getBoundingClientRect();
-    roleSelector.style.left = rect.left + 'px';
-    roleSelector.style.bottom = window.innerHeight - rect.top + 8 + 'px';
+    const narrow = window.matchMedia('(max-width: 900px)').matches;
+    if (narrow) {
+      roleSelector.style.left = '10px';
+      roleSelector.style.right = '10px';
+      roleSelector.style.width = 'auto';
+    } else {
+      roleSelector.style.left = rect.left + 'px';
+      roleSelector.style.right = 'auto';
+      roleSelector.style.width = '';
+    }
+    roleSelector.style.bottom = Math.max(12, window.innerHeight - rect.top + 8) + 'px';
     roleSelector.hidden = !roleSelector.hidden;
   });
 
@@ -163,8 +177,9 @@ async function checkSystemStatus() {
     const data = await res.json();
     statusDot?.classList.add('online');
     statusDot?.classList.remove('offline');
-    if (data.demoMode) statusText.textContent = 'Demo · add NVIDIA key';
-    else if (data.nvidiaConfigured) statusText.textContent = 'NVIDIA Online';
+    const narrow = window.matchMedia('(max-width: 900px)').matches;
+    if (data.demoMode) statusText.textContent = narrow ? 'Demo' : 'Demo · add NVIDIA key';
+    else if (data.nvidiaConfigured) statusText.textContent = narrow ? 'NIM' : 'NVIDIA Online';
     else if (data.apiKeyConfigured) statusText.textContent = 'Online';
     else statusText.textContent = 'Online';
   } catch {
@@ -413,6 +428,50 @@ function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (c) => map[c]);
 }
 
+
+function initMobileChrome() {
+  const moreBtn = document.getElementById('headerMoreBtn');
+  const moreMenu = document.getElementById('headerMoreMenu');
+  if (moreBtn && moreMenu) {
+    moreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = moreMenu.hasAttribute('hidden');
+      if (open) moreMenu.removeAttribute('hidden');
+      else moreMenu.setAttribute('hidden', '');
+      moreBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    moreMenu.querySelectorAll('[data-trigger]').forEach((item) => {
+      item.addEventListener('click', () => {
+        const id = item.getAttribute('data-trigger');
+        document.getElementById(id)?.click();
+        moreMenu.setAttribute('hidden', '');
+        moreBtn.setAttribute('aria-expanded', 'false');
+      });
+    });
+    document.addEventListener('click', () => {
+      moreMenu.setAttribute('hidden', '');
+      moreBtn.setAttribute('aria-expanded', 'false');
+    });
+    moreMenu.addEventListener('click', (e) => e.stopPropagation());
+  }
+
+  // iOS keyboard: scroll focused input into view
+  document.getElementById('chatInput')?.addEventListener('focus', () => {
+    setTimeout(() => {
+      document.getElementById('composerShell')?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    }, 300);
+  });
+
+  // Close board panel when tapping backdrop on mobile
+  document.getElementById('main')?.addEventListener('click', (e) => {
+    if (!window.matchMedia('(max-width: 900px)').matches) return;
+    if (!state.boardPanelOpen) return;
+    if (e.target.closest?.('#boardPanel, #boardBtn')) return;
+    state.boardPanelOpen = false;
+    boardPanel?.classList.remove('open');
+  });
+}
+
 // ── Waveform canvas in composer ─────────────────────────────────────────────
 function initWaveform() {
   const canvas = document.getElementById('composerWave');
@@ -423,11 +482,12 @@ function initWaveform() {
 
   function resize() {
     const rect = canvas.parentElement.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const h = window.matchMedia('(max-width: 900px)').matches ? 22 : 36;
     canvas.width = Math.max(120, rect.width) * dpr;
-    canvas.height = 36 * dpr;
+    canvas.height = h * dpr;
     canvas.style.width = '100%';
-    canvas.style.height = '36px';
+    canvas.style.height = h + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   resize();
@@ -435,7 +495,7 @@ function initWaveform() {
 
   function draw() {
     const w = canvas.clientWidth || 300;
-    const h = 36;
+    const h = window.matchMedia('(max-width: 900px)').matches ? 22 : 36;
     ctx.clearRect(0, 0, w, h);
     const shell = document.getElementById('composerShell');
     const active = shell?.classList.contains('is-active') || shell?.classList.contains('is-thinking');
