@@ -66,7 +66,7 @@ ${recentLogs}
   // Setup message uses snake_case for the raw WebSocket protocol
   const setupMessage = {
     setup: {
-      model: 'models/gemini-3.1-flash-live-preview',
+      model: env('GEMINI_LIVE_MODEL', 'models/gemini-2.5-flash-native-audio-preview-12-2025'),
       generation_config: {
         response_modalities: ['AUDIO'],
         speech_config: {
@@ -97,7 +97,7 @@ ${recentLogs}
 router.get('/status', (req, res) => {
   res.json({
     voiceEnabled: !!GEMINI_API_KEY,
-    model: 'gemini-3.1-flash-live-preview',
+    model: env('GEMINI_LIVE_MODEL', 'gemini-2.5-flash-native-audio-preview-12-2025'),
     provider: 'Google Gemini Live API',
   });
 });

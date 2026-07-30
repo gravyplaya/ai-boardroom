@@ -107,8 +107,12 @@ router.post('/chat', async (req, res) => {
     }
 
     // Graceful user-facing error (don't blank the chat)
+    const isAuth = /401|User not found|invalid.?api.?key|API_KEY_INVALID|PERMISSION_DENIED/i.test(err.message || '');
+    const guidance = isAuth
+      ? 'Your Gemini or OpenRouter API key looks invalid or revoked. Open the Vercel project → Settings → Environment Variables, re-paste **GEMINI_API_KEY** and/or **OPENROUTER_API_KEY** (no quotes, no trailing spaces), then Redeploy.'
+      : 'Check your API keys and model names in environment settings, then try again.';
     res.json({
-      response: `I hit an error talking to the model provider:\n\n> ${err.message}\n\nCheck your API keys and model names in environment settings, then try again.`,
+      response: `I hit an error talking to the model provider:\n\n> ${err.message}\n\n${guidance}`,
       model: 'error',
       role: req.body?.role || 'jarvis',
       boardMember: 'Jarvis — Error Recovery',

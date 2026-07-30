@@ -4,7 +4,7 @@
  */
 
 const WINDOW_MS = 15 * 60 * 1000;
-const MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX) || 200;
+const MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX) || 500;
 
 const clients = new Map();
 

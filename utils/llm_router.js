@@ -16,8 +16,8 @@ dotenv.config({ quiet: true });
 // ── Board Member Model Configuration ────────────────────────────────────────
 const BOARD_MODELS = {
   jarvis: {
-    model: env('MODEL_JARVIS') || 'gemini-3.1-pro-preview',
-    fallbackModel: 'nvidia/llama-3.1-nemotron-70b-instruct:free',
+    model: env('MODEL_JARVIS') || 'gemini-2.5-flash',
+    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'Chief of Staff — fast, conversational, task routing',
     systemPrompt: `You are JARVIS, the Chief of Staff of AI Boardroom — a real production platform where autonomous AI agents build, deploy, and test real software. You are the sole interface between the human stakeholder and the Board of Directors.
 
@@ -35,8 +35,8 @@ When the user gives a directive, identify which Board Member(s) should handle it
   },
 
   architect: {
-    model: env('MODEL_CEO') || 'gemini-3.1-pro-preview',
-    fallbackModel: 'anthropic/claude-3-opus:beta',
+    model: env('MODEL_CEO') || 'gemini-2.5-pro',
+    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CEO / Architect — high-level strategy, system design, project planning',
     systemPrompt: `You are The Architect, the CEO of AI Boardroom. You handle high-level strategy and system design.
 
@@ -52,8 +52,8 @@ You think in systems. Every decision must be justified with clear reasoning. Out
   },
 
   coder: {
-    model: env('MODEL_CTO') || 'gemini-3.1-pro-preview',
-    fallbackModel: 'anthropic/claude-3.5-sonnet:beta',
+    model: env('MODEL_CTO') || 'gemini-2.5-pro',
+    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CTO / Coder — engineering, implementation, deployment',
     systemPrompt: `You are The Coder, the CTO of AI Boardroom. You handle all engineering and implementation.
 
@@ -130,8 +130,8 @@ ${getSystemInstructionForTools('coder')}`,
   },
 
   creative: {
-    model: env('MODEL_CMO') || 'gemini-3.1-flash-preview',
-    fallbackModel: 'google/gemini-pro-1.5',
+    model: env('MODEL_CMO') || 'gemini-2.5-flash',
+    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CMO / Creative — design, copywriting, marketing, branding',
     systemPrompt: `You are The Creative, the CMO of AI Boardroom. You handle all design, copywriting, and marketing.
 
@@ -147,8 +147,8 @@ You think visually. Your output should be specific and implementable — color c
   },
 
   analyst: {
-    model: env('MODEL_CFO') || 'gemini-3.1-flash-lite-preview',
-    fallbackModel: 'meta-llama/llama-3-70b-instruct',
+    model: env('MODEL_CFO') || 'gemini-2.5-flash',
+    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CFO / Analyst — research, data, fact-checking, market analysis',
     systemPrompt: `You are The Analyst, the CFO/Researcher of AI Boardroom. You handle data gathering, market research, and fact-checking.
 
@@ -164,8 +164,8 @@ You are precise. You cite sources. You challenge assumptions with data.`,
   },
 
   product: {
-    model: 'gemini-3.1-pro-preview',
-    fallbackModel: 'anthropic/claude-3-haiku',
+    model: env('MODEL_DEFAULT', 'gemini-2.5-pro'),
+    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CPO / Product Manager — roadmaps, requirements, user stories',
     systemPrompt: `You are The Product Manager, the CPO of AI Boardroom. You own the product roadmap and user experience.
 
@@ -181,8 +181,8 @@ You are the voice of the user. You ensure we build the right thing, not just any
   },
 
   devops: {
-    model: 'gemini-3.1-pro-preview',
-    fallbackModel: 'meta-llama/llama-3.1-405b-instruct',
+    model: env('MODEL_DEFAULT', 'gemini-2.5-pro'),
+    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'Head of Infrastructure — CI/CD, deployment, cloud scaling',
     systemPrompt: `You are The DevOps Lead, responsible for the infrastructure of AI Boardroom.
 
@@ -241,8 +241,8 @@ ${getSystemInstructionForTools('devops')}`,
   },
 
   security: {
-    model: 'gemini-3.1-flash-preview',
-    fallbackModel: 'meta-llama/llama-3.1-70b-instruct:free',
+    model: env('MODEL_DEFAULT_FLASH', 'gemini-2.5-flash'),
+    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CISO / Security Officer — audits, encryption, auth hardening',
     systemPrompt: `You are The Security Officer, the CISO of AI Boardroom. You are the guardian of the platform.
 
@@ -258,8 +258,8 @@ You are paranoid in the best way. Safety and trust are your only metrics.`,
   },
 
   qa: {
-    model: 'gemini-3.1-flash-preview',
-    fallbackModel: 'google/gemini-flash-1.5',
+    model: env('MODEL_DEFAULT_FLASH', 'gemini-2.5-flash'),
+    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'Chief Quality Officer — testing, bug hunting, UX validation',
     systemPrompt: `You are The QA Lead, the Chief Quality Officer of AI Boardroom.
 
