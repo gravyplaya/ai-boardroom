@@ -36,7 +36,10 @@ function demoResponse(role = 'jarvis') {
 }
 
 function isMissingKeyError(message = '') {
-  return /OPENROUTER_API_KEY|GEMINI_API_KEY|API key|api key|Neither GEMINI/i.test(message);
+  // Only treat *missing* configuration as demo mode — not invalid/revoked keys
+  return /Neither GEMINI_API_KEY nor OPENROUTER_API_KEY|GEMINI_API_KEY not set|OPENROUTER_API_KEY is working|hasn't been configured|not configured yet/i.test(
+    message
+  );
 }
 
 // ── POST /api/chat ──────────────────────────────────────────────────────────
