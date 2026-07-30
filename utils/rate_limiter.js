@@ -4,9 +4,14 @@
  */
 
 const WINDOW_MS = 15 * 60 * 1000;
-const MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX) || 500;
+const MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX) > 0
+  ? Number(process.env.RATE_LIMIT_MAX)
+  : 1000;
 
 const clients = new Map();
+
+// Don't rate-limit health / static-ish status endpoints
+const SKIP = new Set(['/api/status', '/api/board', '/health', '/api/voice/status']);
 
 function prune(now) {
   if (clients.size < 500) return;
@@ -16,6 +21,11 @@ function prune(now) {
 }
 
 export function rateLimiter(req, res, next) {
+  const path = (req.path || req.url || '').split('?')[0];
+  if (SKIP.has(path) || req.method === 'OPTIONS') {
+    return next();
+  }
+
   const ip =
     req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim() ||
     req.ip ||

@@ -337,19 +337,27 @@ export async function routeToLLM({
     throw new Error(`Unknown board member role: "${role}". Valid roles: ${Object.keys(BOARD_MODELS).join(', ')}`);
   }
 
+  let geminiError = null;
+
   // 1. Try Gemini Native API using @google/genai
   if (ai) {
     try {
       return await routeViaGemini({ prompt, messages, boardMember, role, temperature, model });
     } catch (err) {
+      geminiError = err.message;
       console.warn(`[LLM] Gemini API failed: ${err.message}, falling back to OpenRouter...`);
     }
   } else {
+    geminiError = 'GEMINI_API_KEY not set';
     console.warn(`[LLM] GEMINI_API_KEY missing, attempting OpenRouter...`);
   }
 
   // 2. OpenRouter Fallback
-  return await routeViaOpenRouter({ prompt, messages, boardMember, role, temperature, model });
+  try {
+    return await routeViaOpenRouter({ prompt, messages, boardMember, role, temperature, model });
+  } catch (orErr) {
+    throw new Error(`Gemini: ${geminiError || 'n/a'} | OpenRouter: ${orErr.message}`);
+  }
 }
 
 /**
