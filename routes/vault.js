@@ -49,12 +49,13 @@ router.get('/mindmap', async (_req, res) => {
   let nodes = [{ id: rootId, name: 'AI Boardroom Hub', group: 0, isDir: true }];
   let links = [];
 
-  const vaultGraph = await buildForceGraphData(path.join(BASE_PATH, 'obsidian_vault'), rootId, 0);
-  const srcGraph = await buildForceGraphData(path.join(BASE_PATH, 'routes'), rootId, 0);
-  const coreFiles = ['server.js', 'project_overview.md', 'package.json'];
-
-  nodes = nodes.concat(vaultGraph.nodes).concat(srcGraph.nodes);
-  links = links.concat(vaultGraph.links).concat(srcGraph.links);
+  const folders = ['obsidian_vault', 'routes', 'utils', 'public', 'api'];
+  for (const folder of folders) {
+    const g = await buildForceGraphData(path.join(BASE_PATH, folder), rootId, 0);
+    nodes = nodes.concat(g.nodes);
+    links = links.concat(g.links);
+  }
+  const coreFiles = ['server.js', 'project_overview.md', 'package.json', 'vercel.json'];
 
   coreFiles.forEach((file) => {
     nodes.push({ id: file, name: file, group: 1, isDir: false });

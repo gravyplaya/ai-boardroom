@@ -1,6 +1,6 @@
 {
   "name": "ai-boardroom",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -20,7 +20,7 @@
   ],
   "author": "",
   "license": "ISC",
-  "description": "AI Boardroom — multi-agent platform where autonomous AI agents build, deploy, and test real software",
+  "description": "AI Boardroom multi-agent platform \u2014 NVIDIA NIM primary, multi-provider models & voice",
   "dependencies": {
     "@google/genai": "^1.49.0",
     "cors": "^2.8.6",

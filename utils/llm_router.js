@@ -1,23 +1,25 @@
 /**
- * llm_router.js — Gemini 3 API Connection (Primary) with OpenRouter Fallback
- * 
- * Routes prompts to different Gemini models based on which Board Member is speaking.
- * Grants specialized tools (Computer Use, Search Grounding) depending on the role.
+ * llm_router.js — Multi-provider LLM router
+ * Priority: NVIDIA NIM → role override → OpenRouter free → other configured providers
  */
 
-import { GoogleGenAI } from '@google/genai';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
-import { getSystemInstructionForTools } from './agent_tools.js';
-import { processToolCalls, hasToolCalls, extractText, buildToolResultMessage } from './tool_executor.js';
+import {
+  PROVIDERS,
+  DEFAULT_ROLE_MODELS,
+  OPENROUTER_FREE_MODELS,
+  NVIDIA_CURATED_MODELS,
+  resolveKey,
+  catalogForProvider,
+} from './providers.js';
 import { env } from './env.js';
+
 dotenv.config({ quiet: true });
 
-// ── Board Member Model Configuration ────────────────────────────────────────
-const BOARD_MODELS = {
+// ── Board Member personas ───────────────────────────────────────────────────
+const BOARD_PERSONAS = {
   jarvis: {
-    model: env('MODEL_JARVIS') || 'gemini-2.5-flash',
-    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'Chief of Staff — fast, conversational, task routing',
     systemPrompt: `You are JARVIS, the Chief of Staff of AI Boardroom — a real production platform where autonomous AI agents build, deploy, and test real software. You are the sole interface between the human stakeholder and the Board of Directors.
 
@@ -31,518 +33,297 @@ Your responsibilities:
 
 When the user gives a directive, identify which Board Member(s) should handle it and explain your delegation plan.`,
     temperature: 0.7,
-    tools: [] // Voice tools handled separately in voice.js
   },
-
   architect: {
-    model: env('MODEL_CEO') || 'gemini-2.5-pro',
-    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CEO / Architect — high-level strategy, system design, project planning',
     systemPrompt: `You are The Architect, the CEO of AI Boardroom. You handle high-level strategy and system design.
-
-Your responsibilities:
-- Break down large projects into milestones
-- Choose tech stacks and dictate architecture
-- Create spec documents (00_spec.md) for the team
-- Spawn and assign sub-agents as needed (front-end engineers, back-end engineers, UI/UX designers, cloud architects, deployment specialists)
-
-You think in systems. Every decision must be justified with clear reasoning. Output structured plans, not vague ideas.`,
+Break down large projects into milestones, choose tech stacks, and produce clear specs. Think in systems.`,
     temperature: 0.6,
-    tools: [{ googleSearch: {} }]
   },
-
   coder: {
-    model: env('MODEL_CTO') || 'gemini-2.5-pro',
-    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CTO / Coder — engineering, implementation, deployment',
-    systemPrompt: `You are The Coder, the CTO of AI Boardroom. You handle all engineering and implementation.
-
-Your responsibilities:
-- Write production-quality code
-- Manage server deployments
-- Debug errors and optimize performance
-- Spawn sub-agents: front-end engineers, back-end engineers, DevOps specialists
-
-You write clean, well-documented, tested code. You deploy. You don't suggest — you build.
-
-${getSystemInstructionForTools('coder')}`,
+    systemPrompt: `You are The Coder, the CTO of AI Boardroom. Write production-quality code, debug, and ship. Prefer complete, runnable solutions over vague suggestions.`,
     temperature: 0.3,
-    tools: [
-      {
-        functionDeclarations: [
-          {
-            name: 'execute_javascript',
-            description: 'Execute JavaScript code in a sandboxed environment. Use for testing, data processing, and quick scripts.',
-            parameters: {
-              type: 'object',
-              properties: {
-                code: {
-                  type: 'string',
-                  description: 'JavaScript code to execute'
-                },
-                timeout: {
-                  type: 'number',
-                  description: 'Execution timeout in milliseconds (default: 5000)'
-                }
-              },
-              required: ['code']
-            }
-          },
-          {
-            name: 'execute_python',
-            description: 'Execute Python code in a sandboxed environment. Use for data analysis, ML tasks, and scripts.',
-            parameters: {
-              type: 'object',
-              properties: {
-                code: {
-                  type: 'string',
-                  description: 'Python code to execute'
-                },
-                timeout: {
-                  type: 'number',
-                  description: 'Execution timeout in milliseconds (default: 5000)'
-                }
-              },
-              required: ['code']
-            }
-          },
-          {
-            name: 'execute_shell',
-            description: 'Execute shell commands in a sandboxed environment. Use for system operations, CLI tools, and git commands.',
-            parameters: {
-              type: 'object',
-              properties: {
-                command: {
-                  type: 'string',
-                  description: 'Shell command to execute'
-                },
-                timeout: {
-                  type: 'number',
-                  description: 'Execution timeout in milliseconds (default: 5000)'
-                }
-              },
-              required: ['command']
-            }
-          }
-        ]
-      }
-    ]
   },
-
   creative: {
-    model: env('MODEL_CMO') || 'gemini-2.5-flash',
-    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CMO / Creative — design, copywriting, marketing, branding',
-    systemPrompt: `You are The Creative, the CMO of AI Boardroom. You handle all design, copywriting, and marketing.
-
-Your responsibilities:
-- Generate UI/UX layouts and wireframes
-- Write landing page copy, marketing materials, and brand voice
-- Prompt image/video generators for assets
-- Create design documents (01_design.md)
-
-You think visually. Your output should be specific and implementable — color codes, font choices, spacing, hierarchy.`,
+    systemPrompt: `You are The Creative, the CMO of AI Boardroom. Handle UI/UX, copy, branding. Be specific: colors, type, hierarchy, implementable design.`,
     temperature: 0.9,
-    tools: [{ googleSearch: {} }]
   },
-
   analyst: {
-    model: env('MODEL_CFO') || 'gemini-2.5-flash',
-    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CFO / Analyst — research, data, fact-checking, market analysis',
-    systemPrompt: `You are The Analyst, the CFO/Researcher of AI Boardroom. You handle data gathering, market research, and fact-checking.
-
-Your responsibilities:
-- Analyze competitors and markets
-- Check API documentation and verify technical facts before implementation
-- Review code and specs against the original brief for errors or missing features
-- Provide data-driven recommendations
-
-You are precise. You cite sources. You challenge assumptions with data.`,
+    systemPrompt: `You are The Analyst, the CFO/Researcher of AI Boardroom. Be precise, cite reasoning, challenge assumptions with data.`,
     temperature: 0.4,
-    tools: [{ googleSearch: {} }]
   },
-
   product: {
-    model: env('MODEL_DEFAULT', 'gemini-2.5-pro'),
-    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CPO / Product Manager — roadmaps, requirements, user stories',
-    systemPrompt: `You are The Product Manager, the CPO of AI Boardroom. You own the product roadmap and user experience.
-
-Your responsibilities:
-- Translate the Architect's high-level specs into actionable User Stories and requirements
-- Prioritize features based on user value and feasibility
-- Define the "Definition of Done" for all tasks
-- Bridge the gap between business strategy and engineering implementation
-
-You are the voice of the user. You ensure we build the right thing, not just anything.`,
+    systemPrompt: `You are The Product Manager (CPO). Translate strategy into user stories, prioritize by value, define Definition of Done.`,
     temperature: 0.7,
-    tools: [{ googleSearch: {} }]
   },
-
   devops: {
-    model: env('MODEL_DEFAULT', 'gemini-2.5-pro'),
-    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'Head of Infrastructure — CI/CD, deployment, cloud scaling',
-    systemPrompt: `You are The DevOps Lead, responsible for the infrastructure of AI Boardroom.
-
-Your responsibilities:
-- Manage CI/CD pipelines and deployment workflows (Vercel, AWS, Docker)
-- Monitor system health, latency, and performance metrics
-- Optimize the local development environment and server configurations
-- Ensure zero-downtime deployments and system reliability
-
-You think in pipelines and scale. You move fast but ensure the foundation is unbreakable.
-
-${getSystemInstructionForTools('devops')}`,
+    systemPrompt: `You are The DevOps Lead. Own CI/CD, infra, observability, zero-downtime deploys. Think in pipelines and reliability.`,
     temperature: 0.2,
-    tools: [
-      {
-        functionDeclarations: [
-          {
-            name: 'execute_shell',
-            description: 'Execute shell commands in a sandboxed environment. Use for system operations, deployment, and infrastructure management.',
-            parameters: {
-              type: 'object',
-              properties: {
-                command: {
-                  type: 'string',
-                  description: 'Shell command to execute'
-                },
-                timeout: {
-                  type: 'number',
-                  description: 'Execution timeout in milliseconds (default: 5000)'
-                }
-              },
-              required: ['command']
-            }
-          },
-          {
-            name: 'execute_python',
-            description: 'Execute Python code in a sandboxed environment. Use for infrastructure automation and configuration.',
-            parameters: {
-              type: 'object',
-              properties: {
-                code: {
-                  type: 'string',
-                  description: 'Python code to execute'
-                },
-                timeout: {
-                  type: 'number',
-                  description: 'Execution timeout in milliseconds (default: 5000)'
-                }
-              },
-              required: ['code']
-            }
-          }
-        ]
-      }
-    ]
   },
-
   security: {
-    model: env('MODEL_DEFAULT_FLASH', 'gemini-2.5-flash'),
-    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'CISO / Security Officer — audits, encryption, auth hardening',
-    systemPrompt: `You are The Security Officer, the CISO of AI Boardroom. You are the guardian of the platform.
-
-Your responsibilities:
-- Perform security audits on every code block produced by the team
-- Enforce strict authentication, encryption, and data privacy standards
-- Identify and patch vulnerabilities (XSS, SQLi, CSRF, etc.)
-- Ensure compliance with the highest security protocols
-
-You are paranoid in the best way. Safety and trust are your only metrics.`,
+    systemPrompt: `You are The Security Officer (CISO). Audit for XSS/SQLi/CSRF, enforce least privilege, reject unsafe designs.`,
     temperature: 0.1,
-    tools: [{ googleSearch: {} }]
   },
-
   qa: {
-    model: env('MODEL_DEFAULT_FLASH', 'gemini-2.5-flash'),
-    fallbackModel: env('OPENROUTER_FALLBACK', 'openrouter/auto'),
     description: 'Chief Quality Officer — testing, bug hunting, UX validation',
-    systemPrompt: `You are The QA Lead, the Chief Quality Officer of AI Boardroom.
-
-Your responsibilities:
-- Simulate end-user behavior to find UX friction points
-- Write and execute end-to-end (E2E) and integration tests
-- Perform edge-case stress testing on all new features
-- Reject any implementation that does not meet the "Definition of Done"
-
-You are the final gate. If it's not perfect, it doesn't ship.`,
+    systemPrompt: `You are The QA Lead. Write tests, hunt edge cases, reject incomplete work. Final gate before ship.`,
     temperature: 0.5,
-    tools: [
-      {
-        functionDeclarations: [
-          {
-            name: 'execute_javascript',
-            description: 'Execute JavaScript code for testing and validation.',
-            parameters: {
-              type: 'object',
-              properties: {
-                code: {
-                  type: 'string',
-                  description: 'JavaScript test code to execute'
-                },
-                timeout: {
-                  type: 'number',
-                  description: 'Execution timeout in milliseconds (default: 5000)'
-                }
-              },
-              required: ['code']
-            }
-          },
-          {
-            name: 'execute_python',
-            description: 'Execute Python code for testing and data validation.',
-            parameters: {
-              type: 'object',
-              properties: {
-                code: {
-                  type: 'string',
-                  description: 'Python test code to execute'
-                },
-                timeout: {
-                  type: 'number',
-                  description: 'Execution timeout in milliseconds (default: 5000)'
-                }
-              },
-              required: ['code']
-            }
-          }
-        ]
-      }
-    ]
   },
 };
 
-const GEMINI_KEY = env('GEMINI_API_KEY');
-const ai = GEMINI_KEY ? new GoogleGenAI({ apiKey: GEMINI_KEY }) : null;
+function buildMessages({ prompt, messages, systemPrompt }) {
+  if (messages && messages.length) {
+    const out = messages.filter((m) => m.role !== 'system').map((m) => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: m.content,
+    }));
+    return [{ role: 'system', content: systemPrompt }, ...out];
+  }
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: prompt || '' },
+  ];
+}
 
-// ── Core Router Function ────────────────────────────────────────────────────
+async function callOpenAICompatible({ baseUrl, apiKey, model, messages, temperature, extraHeaders = {} }) {
+  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const body = {
+    model,
+    messages,
+    temperature: temperature ?? 0.7,
+    max_tokens: Number(env('LLM_MAX_TOKENS', '2048')),
+    stream: false,
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      ...extraHeaders,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`${res.status} ${text.slice(0, 400)}`);
+  }
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Invalid JSON from provider: ${text.slice(0, 200)}`);
+  }
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error('Empty completion from provider');
+  return {
+    content,
+    model: data.model || model,
+    usage: data.usage || {},
+  };
+}
+
+async function callAnthropic({ apiKey, model, messages, temperature }) {
+  const system = messages.find((m) => m.role === 'system')?.content || '';
+  const anthropicMessages = messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }));
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: Number(env('LLM_MAX_TOKENS', '2048')),
+      temperature: temperature ?? 0.7,
+      system,
+      messages: anthropicMessages,
+    }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${text.slice(0, 400)}`);
+  const data = JSON.parse(text);
+  const content = data.content?.map((c) => c.text || '').join('') || '';
+  if (!content) throw new Error('Empty Anthropic response');
+  return { content, model: data.model || model, usage: data.usage || {} };
+}
 
 /**
- * Routes a prompt to the appropriate LLM via Gemini 3 API (Primary) or OpenRouter (Fallback).
- * Implements agentic tool-calling loop for agents that need to execute tools.
+ * Build ordered attempt list for a role given client prefs.
+ * @param {object} opts
+ */
+export function buildAttemptPlan({ role = 'jarvis', provider, model, roleModels = {}, clientKeys = {} }) {
+  const attempts = [];
+  const seen = new Set();
+  const push = (p, m) => {
+    if (!p || !m) return;
+    const key = `${p}::${m}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    attempts.push({ provider: p, model: m });
+  };
+
+  // 1) Explicit request override
+  if (provider && model) push(provider, model);
+
+  // 2) Per-role assignment from client settings
+  const rolePref = roleModels[role] || DEFAULT_ROLE_MODELS[role];
+  if (rolePref) push(rolePref.provider, rolePref.model);
+
+  // 3) All curated NVIDIA models if NVIDIA key present (primary stack)
+  if (resolveKey('nvidia', clientKeys)) {
+    for (const m of NVIDIA_CURATED_MODELS.filter((x) => x.chat !== false).slice(0, 6)) {
+      push('nvidia', m.id);
+    }
+  }
+
+  // 4) OpenRouter free models if key present
+  if (resolveKey('openrouter', clientKeys)) {
+    for (const m of OPENROUTER_FREE_MODELS.slice(0, 5)) {
+      push('openrouter', m.id);
+    }
+  }
+
+  // 5) Any other configured provider defaults
+  for (const pid of ['openai', 'google', 'xai', 'anthropic']) {
+    if (!resolveKey(pid, clientKeys)) continue;
+    const cat = catalogForProvider(pid);
+    if (cat[0]) push(pid, cat[0].id);
+  }
+
+  return attempts;
+}
+
+async function runAttempt({ provider, model, messages, temperature, clientKeys }) {
+  const apiKey = resolveKey(provider, clientKeys);
+  if (!apiKey) throw new Error(`No API key for provider ${provider}`);
+
+  const p = PROVIDERS[provider];
+  if (!p) throw new Error(`Unknown provider ${provider}`);
+
+  if (provider === 'anthropic') {
+    return callAnthropic({ apiKey, model, messages, temperature });
+  }
+
+  const extraHeaders = {};
+  if (provider === 'openrouter') {
+    extraHeaders['HTTP-Referer'] = env('APP_URL', 'https://ai-boardroom.local');
+    extraHeaders['X-Title'] = 'AI Boardroom';
+  }
+
+  return callOpenAICompatible({
+    baseUrl: p.baseUrl,
+    apiKey,
+    model,
+    messages,
+    temperature,
+    extraHeaders,
+  });
+}
+
+/**
+ * Route a prompt to the best available LLM.
  */
 export async function routeToLLM({
   prompt,
   role = 'jarvis',
   messages = null,
   model = null,
+  provider = null,
   temperature = null,
+  clientKeys = {},
+  roleModels = {},
 }) {
-  const boardMember = BOARD_MODELS[role];
-  if (!boardMember) {
-    throw new Error(`Unknown board member role: "${role}". Valid roles: ${Object.keys(BOARD_MODELS).join(', ')}`);
+  const persona = BOARD_PERSONAS[role];
+  if (!persona) {
+    throw new Error(`Unknown board member role: "${role}". Valid: ${Object.keys(BOARD_PERSONAS).join(', ')}`);
   }
 
-  let geminiError = null;
-
-  // 1. Try Gemini Native API using @google/genai
-  if (ai) {
-    try {
-      return await routeViaGemini({ prompt, messages, boardMember, role, temperature, model });
-    } catch (err) {
-      geminiError = err.message;
-      console.warn(`[LLM] Gemini API failed: ${err.message}, falling back to OpenRouter...`);
-    }
-  } else {
-    geminiError = 'GEMINI_API_KEY not set';
-    console.warn(`[LLM] GEMINI_API_KEY missing, attempting OpenRouter...`);
-  }
-
-  // 2. OpenRouter Fallback
-  try {
-    return await routeViaOpenRouter({ prompt, messages, boardMember, role, temperature, model });
-  } catch (orErr) {
-    throw new Error(`Gemini: ${geminiError || 'n/a'} | OpenRouter: ${orErr.message}`);
-  }
-}
-
-/**
- * Route via Gemini with agentic tool-calling loop
- */
-async function routeViaGemini({ prompt, messages, boardMember, role, temperature, model }) {
-  let conversationMessages = buildGeminiContents(prompt, messages);
-  const config = {
-    systemInstruction: boardMember.systemPrompt,
-    temperature: temperature ?? 1.0, // Gemini 3 docs highly recommend 1.0
-  };
-
-  if (boardMember.tools && boardMember.tools.length > 0) {
-    config.tools = boardMember.tools;
-  }
-
-  // Prefer requested model, then board default, then stable Gemini fallbacks
-  const modelCandidates = [
-    model,
-    boardMember.model,
-    env('GEMINI_FALLBACK_MODEL', 'gemini-2.5-flash'),
-    'gemini-2.0-flash',
-    'gemini-flash-latest',
-  ].filter(Boolean);
-  // de-dupe
-  const seen = new Set();
-  const models = modelCandidates.filter((m) => (seen.has(m) ? false : (seen.add(m), true)));
-
-  let m = models[0];
-  const maxToolLoops = 5; // Prevent infinite loops
-  let loopCount = 0;
-  let modelIndex = 0;
-
-  while (loopCount < maxToolLoops) {
-    let response;
-    try {
-      response = await ai.models.generateContent({
-        model: m,
-        contents: conversationMessages,
-        config: config
-      });
-    } catch (err) {
-      // Model not found / unavailable → try next candidate
-      if (modelIndex < models.length - 1 && /not found|NOT_FOUND|invalid model|404/i.test(err.message || '')) {
-        modelIndex += 1;
-        m = models[modelIndex];
-        console.warn(`[LLM] Model switch → ${m} (${err.message})`);
-        continue;
-      }
-      throw err;
-    }
-
-    console.log(`[GEMINI LOOP ${loopCount}] Response type:`, typeof response, 'has text:', !!response.text, 'has candidates:', !!response.candidates);
-
-    // Check if response contains tool calls
-    if (hasToolCalls(response)) {
-      console.log(`[GEMINI LOOP ${loopCount}] Tool calls detected, processing...`);
-      const toolResults = await processToolCalls(response);
-
-      // Add assistant response (with tool calls) to conversation
-      conversationMessages.push({
-        role: 'model',
-        parts: response.candidates[0].content.parts,
-      });
-
-      // Build and add tool results message
-      const toolResultMessage = buildToolResultMessage(toolResults);
-      if (toolResultMessage) {
-        conversationMessages.push(toolResultMessage);
-      }
-
-      loopCount++;
-      // Continue loop to get next response from agent
-    } else {
-      // No more tool calls, extract final text
-      console.log(`[GEMINI LOOP ${loopCount}] No tool calls, extracting final text`);
-      const finalText = extractText(response);
-      return {
-        content: finalText,
-        model: m,
-        role: role,
-        boardMember: boardMember.description,
-        usage: {},
-        toolLoops: loopCount,
-      };
-    }
-  }
-
-  // Fallback if max loops exceeded
-  throw new Error(`Agent exceeded maximum tool calling loops (${maxToolLoops})`);
-}
-
-function buildGeminiContents(prompt, messages) {
-  if (messages) {
-    return messages.filter(m => m.role !== 'system').map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }]
-    }));
-  }
-  return [{
-    role: 'user',
-    parts: [{ text: prompt }]
-  }];
-}
-
-async function routeViaOpenRouter({ prompt, messages, boardMember, role, temperature, model }) {
-  const openRouterKey = env('OPENROUTER_API_KEY');
-  if (!openRouterKey) {
-    throw new Error('Neither GEMINI_API_KEY nor OPENROUTER_API_KEY is working. Check your .env file.');
-  }
-
-  const requestMessages = messages || [
-    { role: 'system', content: boardMember.systemPrompt },
-    { role: 'user', content: prompt },
-  ];
-
-  if (messages && messages[0]?.role !== 'system') {
-    requestMessages.unshift({ role: 'system', content: boardMember.systemPrompt });
-  }
-
-  const m = model || boardMember.fallbackModel;
-  const temp = temperature ?? boardMember.temperature;
-
-  const requestBody = {
-    model: m,
-    messages: requestMessages,
-    temperature: temp,
-  };
-
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${openRouterKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://boardme.ai',
-      'X-Title': 'AI Boardroom',
-    },
-    body: JSON.stringify(requestBody),
+  const requestMessages = buildMessages({
+    prompt,
+    messages,
+    systemPrompt: persona.systemPrompt,
   });
 
-  if (response.ok) {
-    const data = await response.json();
-    if (data.choices?.[0]?.message?.content) {
+  const attempts = buildAttemptPlan({ role, provider, model, roleModels, clientKeys });
+  if (!attempts.length) {
+    throw new Error(
+      'Neither NVIDIA_API_KEY nor any other LLM provider key is configured. Add keys in Settings or server env.'
+    );
+  }
+
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      const result = await runAttempt({
+        provider: attempt.provider,
+        model: attempt.model,
+        messages: requestMessages,
+        temperature: temperature ?? persona.temperature,
+        clientKeys,
+      });
       return {
-        content: data.choices[0].message.content,
-        model: data.model || m,
-        role: role,
-        boardMember: boardMember.description,
-        usage: data.usage || {},
+        content: result.content,
+        model: result.model,
+        provider: attempt.provider,
+        role,
+        boardMember: persona.description,
+        usage: result.usage,
       };
+    } catch (err) {
+      console.warn(`[LLM] ${attempt.provider}/${attempt.model} failed: ${err.message}`);
+      errors.push(`${attempt.provider}/${attempt.model}: ${err.message}`);
     }
   }
-  
-  const errText = await response.text();
-  throw new Error(`OpenRouter API error (${response.status}): ${errText}`);
+
+  throw new Error(`All providers failed.\n${errors.slice(0, 6).join('\n')}`);
 }
 
-export function getBoardMembers() {
-  return Object.entries(BOARD_MODELS).map(([key, config]) => ({
-    role: key,
-    model: config.model,
-    description: config.description,
-  }));
+export function getBoardMembers(roleModels = {}) {
+  return Object.entries(BOARD_PERSONAS).map(([key, config]) => {
+    const pref = roleModels[key] || DEFAULT_ROLE_MODELS[key] || {};
+    return {
+      role: key,
+      model: pref.model || 'unassigned',
+      provider: pref.provider || 'nvidia',
+      description: config.description,
+    };
+  });
 }
 
-export async function identifyBoardMember(taskDescription) {
+export async function identifyBoardMember(taskDescription, opts = {}) {
   const response = await routeToLLM({
-    prompt: `Analyze this task and determine which ONE board member should handle it. 
-    
+    prompt: `Analyze this task and determine which ONE board member should handle it.
+
 Available members:
-${Object.entries(BOARD_MODELS).map(([k, v]) => `- ${k}: ${v.description}`).join('\n')}
+${Object.entries(BOARD_PERSONAS).map(([k, v]) => `- ${k}: ${v.description}`).join('\n')}
 
 Task: "${taskDescription}"
 
-Respond with ONLY the role key (${Object.keys(BOARD_MODELS).join(', ')}) and a one-sentence justification in this JSON format:
-{"role": "role_key", "reason": "why this member"}`,
+Respond with ONLY JSON: {"role":"role_key","reason":"why"}`,
     role: 'jarvis',
     temperature: 0.2,
+    ...opts,
   });
 
   try {
-    return JSON.parse(response.content);
+    const match = response.content.match(/\{[\s\S]*\}/);
+    return JSON.parse(match ? match[0] : response.content);
   } catch {
     return { role: 'jarvis', reason: 'Defaulting to Jarvis for routing' };
   }
 }
 
-export { BOARD_MODELS };
+export { BOARD_PERSONAS as BOARD_MODELS };
+export default { routeToLLM, getBoardMembers, identifyBoardMember };

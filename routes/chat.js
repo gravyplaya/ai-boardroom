@@ -1,33 +1,50 @@
 /**
- * chat.js — Chat API Routes
- * Handles communication between the Jarvis frontend and the Board of Directors.
+ * chat.js — Chat API with multi-provider routing + client key overrides
  */
 
 import { Router } from 'express';
 import { routeToLLM, getBoardMembers, identifyBoardMember } from '../utils/llm_router.js';
 import { logSystemEvent } from '../utils/vault.js';
 import { orchestrateMessage, getTaskStatus, getAllAgents } from '../utils/paperclip_orchestration.js';
+import { resolveKey, DEFAULT_ROLE_MODELS, PROVIDERS } from '../utils/providers.js';
 import { env } from '../utils/env.js';
 
 const router = Router();
-
 const conversations = new Map();
 const taskHistory = new Map();
+
+function extractClientKeys(req) {
+  const hdr = req.headers['x-provider-keys'];
+  if (hdr) {
+    try {
+      return JSON.parse(Buffer.from(String(hdr), 'base64').toString('utf8'));
+    } catch {
+      /* ignore */
+    }
+  }
+  if (req.body?.providerKeys && typeof req.body.providerKeys === 'object') {
+    return req.body.providerKeys;
+  }
+  return {};
+}
+
+function anyProviderConfigured(clientKeys = {}) {
+  return Object.keys(PROVIDERS).some((id) => !!resolveKey(id, clientKeys));
+}
 
 function demoResponse(role = 'jarvis') {
   return {
     response:
-      `I'm **JARVIS**, your Chief of Staff. I'm running in **demo mode** because no working LLM API key is configured.\n\n` +
-      `To activate the full Board of Directors, set one of these in your Vercel / \`.env\` environment:\n` +
-      `\`\`\`\nGEMINI_API_KEY=your-gemini-key\nOPENROUTER_API_KEY=your-openrouter-key\n\`\`\`\n\n` +
-      `Once connected I can route directives to:\n` +
-      `- **The Architect (CEO)** — Strategy & system design\n` +
-      `- **The Coder (CTO)** — Engineering & deployment\n` +
-      `- **The Creative (CMO)** — Design & marketing\n` +
-      `- **The Analyst (CFO)** — Research & data\n` +
-      `- **Product / DevOps / Security / QA** — Full board coverage\n\n` +
-      `UI panels (vault, canvas, mind map, notepad) still work offline.`,
+      `I'm **JARVIS**, your Chief of Staff. No LLM provider keys are active yet.\n\n` +
+      `**Quick start (recommended):**\n` +
+      `1. Open **Settings** (gear icon)\n` +
+      `2. Paste your **NVIDIA NIM** API key from [build.nvidia.com](https://build.nvidia.com)\n` +
+      `3. Optionally add OpenRouter free-tier, OpenAI, Claude, Gemini, or Grok keys\n` +
+      `4. Assign models per board member\n\n` +
+      `NVIDIA is the primary stack. OpenRouter free models activate automatically as fallback when configured.\n\n` +
+      `UI panels (vault, canvas, mind map, notepad) work offline either way.`,
     model: 'demo-mode',
+    provider: 'none',
     role,
     boardMember: 'Jarvis — Demo Mode',
     usage: {},
@@ -36,40 +53,41 @@ function demoResponse(role = 'jarvis') {
 }
 
 function isMissingKeyError(message = '') {
-  // Only treat *missing* configuration as demo mode — not invalid/revoked keys
-  return /Neither GEMINI_API_KEY nor OPENROUTER_API_KEY|GEMINI_API_KEY not set|OPENROUTER_API_KEY is working|hasn't been configured|not configured yet/i.test(
-    message
-  );
+  return /Neither NVIDIA_API_KEY|no LLM provider|not configured|No API key for provider/i.test(message);
 }
 
 // ── POST /api/chat ──────────────────────────────────────────────────────────
 router.post('/chat', async (req, res) => {
   try {
-    const { message, sessionId = 'default', role = 'jarvis' } = req.body || {};
+    const {
+      message,
+      sessionId = 'default',
+      role = 'jarvis',
+      model = null,
+      provider = null,
+      roleModels = {},
+    } = req.body || {};
 
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    if (!conversations.has(sessionId)) {
-      conversations.set(sessionId, []);
-    }
+    const clientKeys = extractClientKeys(req);
+    const mergedRoleModels = { ...DEFAULT_ROLE_MODELS, ...roleModels };
+
+    if (!conversations.has(sessionId)) conversations.set(sessionId, []);
     const history = conversations.get(sessionId);
 
-    // Track via Paperclip-compatible task model (in-memory)
     try {
       const orchestrationResult = await orchestrateMessage({ message, sessionId, role });
-      if (orchestrationResult?.task) {
-        taskHistory.set(orchestrationResult.task.id, orchestrationResult.task);
-      }
+      if (orchestrationResult?.task) taskHistory.set(orchestrationResult.task.id, orchestrationResult.task);
     } catch (e) {
-      console.warn('[Paperclip] orchestration skipped:', e.message);
+      console.warn('[Paperclip]', e.message);
     }
 
     history.push({ role: 'user', content: message });
 
-    // No keys at all → instant demo (no external call)
-    if (!env('GEMINI_API_KEY') && !env('OPENROUTER_API_KEY')) {
+    if (!anyProviderConfigured(clientKeys)) {
       const demo = demoResponse(role);
       history.push({ role: 'assistant', content: demo.response });
       return res.json(demo);
@@ -78,25 +96,27 @@ router.post('/chat', async (req, res) => {
     const result = await routeToLLM({
       messages: history,
       role,
+      model,
+      provider,
+      clientKeys,
+      roleModels: mergedRoleModels,
     });
 
     history.push({ role: 'assistant', content: result.content });
-
     if (history.length > 50) {
-      const systemMsg = history.find((m) => m.role === 'system');
-      const recent = history.slice(-48);
-      conversations.set(sessionId, systemMsg ? [systemMsg, ...recent] : recent);
+      conversations.set(sessionId, history.slice(-50));
     }
 
     try {
-      await logSystemEvent(role, 'CHAT', `User query processed by ${result.boardMember}`);
+      await logSystemEvent(role, 'CHAT', `Processed by ${result.boardMember} via ${result.provider}/${result.model}`);
     } catch {
-      // vault is non-critical on serverless
+      /* ignore */
     }
 
     res.json({
       response: result.content,
       model: result.model,
+      provider: result.provider,
       role: result.role,
       boardMember: result.boardMember,
       usage: result.usage,
@@ -104,19 +124,13 @@ router.post('/chat', async (req, res) => {
     });
   } catch (err) {
     console.error('[CHAT ERROR]', err.message);
-
     if (isMissingKeyError(err.message)) {
       return res.json(demoResponse(req.body?.role || 'jarvis'));
     }
-
-    // Graceful user-facing error (don't blank the chat)
-    const isAuth = /401|User not found|invalid.?api.?key|API_KEY_INVALID|PERMISSION_DENIED/i.test(err.message || '');
-    const guidance = isAuth
-      ? 'Your Gemini or OpenRouter API key looks invalid or revoked. Open the Vercel project → Settings → Environment Variables, re-paste **GEMINI_API_KEY** and/or **OPENROUTER_API_KEY** (no quotes, no trailing spaces), then Redeploy.'
-      : 'Check your API keys and model names in environment settings, then try again.';
     res.json({
-      response: `I hit an error talking to the model provider:\n\n> ${err.message}\n\n${guidance}`,
+      response: `I hit an error talking to the model providers:\n\n\`\`\`\n${err.message.slice(0, 1200)}\n\`\`\`\n\nOpen **Settings** to verify your NVIDIA (or other) API keys and model assignments.`,
       model: 'error',
+      provider: 'error',
       role: req.body?.role || 'jarvis',
       boardMember: 'Jarvis — Error Recovery',
       usage: {},
@@ -126,111 +140,102 @@ router.post('/chat', async (req, res) => {
   }
 });
 
-// ── POST /api/delegate ──────────────────────────────────────────────────────
 router.post('/delegate', async (req, res) => {
   try {
-    const { task, targetRole } = req.body || {};
-
-    if (!task) {
-      return res.status(400).json({ error: 'Task description is required' });
-    }
+    const { task, targetRole, roleModels = {} } = req.body || {};
+    if (!task) return res.status(400).json({ error: 'Task description is required' });
+    const clientKeys = extractClientKeys(req);
+    const mergedRoleModels = { ...DEFAULT_ROLE_MODELS, ...roleModels };
 
     let role = targetRole;
     let reason = 'Explicitly assigned';
     if (!role) {
-      const assignment = await identifyBoardMember(task);
+      const assignment = await identifyBoardMember(task, { clientKeys, roleModels: mergedRoleModels });
       role = assignment.role;
       reason = assignment.reason;
     }
 
-    const result = await routeToLLM({ prompt: task, role });
-
-    try {
-      await logSystemEvent('jarvis', 'DELEGATE', `Task delegated to ${role}: ${String(task).substring(0, 80)}...`);
-    } catch {
-      /* ignore */
-    }
+    const result = await routeToLLM({
+      prompt: task,
+      role,
+      clientKeys,
+      roleModels: mergedRoleModels,
+    });
 
     res.json({
       response: result.content,
       delegatedTo: role,
       reason,
       model: result.model,
+      provider: result.provider,
       usage: result.usage,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
-    console.error('[DELEGATE ERROR]', err.message);
-    if (isMissingKeyError(err.message)) {
-      return res.json({
-        ...demoResponse('jarvis'),
-        delegatedTo: req.body?.targetRole || 'jarvis',
-        reason: 'Demo mode',
-      });
-    }
     res.status(500).json({ error: 'Delegation failed', details: err.message });
   }
 });
 
-// ── GET /api/board ──────────────────────────────────────────────────────────
-router.get('/board', (_req, res) => {
+router.get('/board', (req, res) => {
+  const clientKeys = extractClientKeys(req);
+  // role models from query optional JSON
+  let roleModels = {};
+  if (req.query.roleModels) {
+    try {
+      roleModels = JSON.parse(String(req.query.roleModels));
+    } catch {
+      /* ignore */
+    }
+  }
   res.json({
-    members: getBoardMembers(),
+    members: getBoardMembers({ ...DEFAULT_ROLE_MODELS, ...roleModels }),
     timestamp: new Date().toISOString(),
   });
 });
 
-// ── GET /api/status ─────────────────────────────────────────────────────────
-router.get('/status', (_req, res) => {
-  const openRouterConfigured = !!env('OPENROUTER_API_KEY');
-  const geminiConfigured = !!env('GEMINI_API_KEY');
+router.get('/status', (req, res) => {
+  const clientKeys = extractClientKeys(req);
+  const providerStatus = {};
+  for (const id of Object.keys(PROVIDERS)) {
+    providerStatus[id] = !!resolveKey(id, clientKeys);
+  }
+  const any = Object.values(providerStatus).some(Boolean);
   res.json({
     status: 'operational',
     platform: 'AI Boardroom',
-    version: '1.1.1',
-    openRouterConfigured,
-    apiKeyConfigured: openRouterConfigured || geminiConfigured,
-    geminiConfigured,
-    voiceEnabled: geminiConfigured,
+    version: '2.0.0',
+    primaryProvider: 'nvidia',
+    providers: providerStatus,
+    nvidiaConfigured: providerStatus.nvidia,
+    openRouterConfigured: providerStatus.openrouter,
+    geminiConfigured: providerStatus.google,
+    openaiConfigured: providerStatus.openai,
+    xaiConfigured: providerStatus.xai,
+    anthropicConfigured: providerStatus.anthropic,
+    apiKeyConfigured: any,
+    voiceEnabled: !!(env('GEMINI_API_KEY') || env('OPENAI_API_KEY') || env('XAI_API_KEY')),
     vaultPath: env('OBSIDIAN_VAULT_PATH', './obsidian_vault'),
     boardMembers: getBoardMembers().length,
     activeSessions: conversations.size,
-    demoMode: !openRouterConfigured && !geminiConfigured,
+    demoMode: !any,
     timestamp: new Date().toISOString(),
   });
 });
 
-// ── Paperclip monitoring ────────────────────────────────────────────────────
 router.get('/paperclip/agents', (_req, res) => {
-  res.json({
-    agents: getAllAgents(),
-    timestamp: new Date().toISOString(),
-  });
+  res.json({ agents: getAllAgents(), timestamp: new Date().toISOString() });
 });
 
 router.get('/paperclip/tasks', (_req, res) => {
   const tasks = Array.from(taskHistory.values());
-  res.json({
-    tasks,
-    totalTasks: tasks.length,
-    timestamp: new Date().toISOString(),
-  });
+  res.json({ tasks, totalTasks: tasks.length, timestamp: new Date().toISOString() });
 });
 
 router.get('/paperclip/tasks/:taskId', async (req, res) => {
-  const { taskId } = req.params;
-  const task = taskHistory.get(taskId);
-
-  if (!task) {
-    return res.status(404).json({ error: 'Task not found' });
-  }
-
-  const status = await getTaskStatus(taskId);
-  res.json({
-    task,
-    status,
-    timestamp: new Date().toISOString(),
-  });
+  const task = taskHistory.get(req.params.taskId);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const status = await getTaskStatus(req.params.taskId);
+  res.json({ task, status, timestamp: new Date().toISOString() });
 });
 
 export default router;

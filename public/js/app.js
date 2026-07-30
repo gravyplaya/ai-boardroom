@@ -1,5 +1,5 @@
 /**
- * app.js — AI Boardroom Frontend Application
+ * app.js — AI Boardroom Frontend (multi-provider + waveform input)
  */
 
 const state = {
@@ -38,13 +38,34 @@ const inputRole = $('#inputRole');
 const roleSelector = $('#roleSelector');
 const metaModel = $('#metaModel');
 
+function providerHeaders() {
+  return window.__boardroomSettings?.getProviderKeysHeader?.() || {};
+}
+
+function getSettings() {
+  return window.__boardroomSettings?.getSettings?.() || { roleModels: {}, globalProvider: 'nvidia', globalModel: '' };
+}
+
+async function api(url, options = {}) {
+  const headers = {
+    ...(options.headers || {}),
+    ...providerHeaders(),
+  };
+  return fetch(url, { ...options, headers });
+}
+
 function init() {
   setGreeting();
   setupEventListeners();
+  initWaveform();
   checkSystemStatus();
   loadBoardMembers();
   loadAnalytics();
-  setInterval(loadAnalytics, 8000);
+  setInterval(loadAnalytics, 10000);
+  window.addEventListener('boardroom:settings', () => {
+    checkSystemStatus();
+    loadBoardMembers();
+  });
 }
 
 function setGreeting() {
@@ -68,6 +89,12 @@ function setupEventListeners() {
     chatInput.style.height = 'auto';
     chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
     if (sendBtn) sendBtn.disabled = !chatInput.value.trim();
+    setComposerActive(!!chatInput.value.trim());
+  });
+
+  chatInput?.addEventListener('focus', () => setComposerActive(true));
+  chatInput?.addEventListener('blur', () => {
+    if (!chatInput.value.trim() && !state.isLoading) setComposerActive(false);
   });
 
   document.querySelectorAll('.quick-action').forEach((btn) => {
@@ -92,7 +119,7 @@ function setupEventListeners() {
     if (!roleSelector) return;
     const rect = inputRole.getBoundingClientRect();
     roleSelector.style.left = rect.left + 'px';
-    roleSelector.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+    roleSelector.style.bottom = window.innerHeight - rect.top + 8 + 'px';
     roleSelector.hidden = !roleSelector.hidden;
   });
 
@@ -106,6 +133,16 @@ function setupEventListeners() {
   document.addEventListener('click', () => {
     if (roleSelector) roleSelector.hidden = true;
   });
+
+  // Model chip opens settings
+  document.getElementById('modelChip')?.addEventListener('click', () => {
+    document.getElementById('settingsBtn')?.click();
+  });
+}
+
+function setComposerActive(on) {
+  document.getElementById('composerShell')?.classList.toggle('is-active', on);
+  document.getElementById('composerShell')?.classList.toggle('is-thinking', state.isLoading);
 }
 
 function setActiveRole(role) {
@@ -114,25 +151,22 @@ function setActiveRole(role) {
   const name = inputRole?.querySelector('.role-name');
   if (dot) dot.dataset.role = role;
   if (name) name.textContent = ROLE_NAMES[role] || role;
-
   const member = state.boardMembers.find((m) => m.role === role);
-  if (member && metaModel) metaModel.textContent = member.model;
+  if (member && metaModel) metaModel.textContent = `${member.provider || ''} · ${member.model || ''}`.replace(/^ · /, '');
+  updateModelChip();
 }
 
 async function checkSystemStatus() {
   try {
-    const res = await fetch('/api/status');
+    const res = await api('/api/status');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     statusDot?.classList.add('online');
     statusDot?.classList.remove('offline');
-    if (data.demoMode) {
-      statusText.textContent = 'Demo Mode';
-    } else if (data.apiKeyConfigured) {
-      statusText.textContent = 'Online';
-    } else {
-      statusText.textContent = 'Online';
-    }
+    if (data.demoMode) statusText.textContent = 'Demo · add NVIDIA key';
+    else if (data.nvidiaConfigured) statusText.textContent = 'NVIDIA Online';
+    else if (data.apiKeyConfigured) statusText.textContent = 'Online';
+    else statusText.textContent = 'Online';
   } catch {
     statusDot?.classList.add('offline');
     statusDot?.classList.remove('online');
@@ -142,64 +176,65 @@ async function checkSystemStatus() {
 
 async function loadBoardMembers() {
   try {
-    const res = await fetch('/api/board');
+    const settings = getSettings();
+    const q = encodeURIComponent(JSON.stringify(settings.roleModels || {}));
+    const res = await api(`/api/board?roleModels=${q}`);
     if (!res.ok) throw new Error('board fetch failed');
     const data = await res.json();
     state.boardMembers = data.members || [];
     renderBoardMembers();
-
     const jarvis = state.boardMembers.find((m) => m.role === 'jarvis');
-    if (jarvis && metaModel) metaModel.textContent = jarvis.model;
+    if (jarvis && metaModel) metaModel.textContent = `${jarvis.provider} · ${jarvis.model}`;
+    updateModelChip();
   } catch {
-    // offline — UI still usable for static welcome
+    /* offline */
   }
+}
+
+function updateModelChip() {
+  const chip = document.getElementById('modelChipLabel');
+  if (!chip) return;
+  const settings = getSettings();
+  const pref = settings.roleModels?.[state.activeRole];
+  if (pref?.model) {
+    chip.textContent = pref.model.split('/').pop();
+    return;
+  }
+  if (settings.globalModel) {
+    chip.textContent = settings.globalModel.split('/').pop();
+    return;
+  }
+  const member = state.boardMembers.find((m) => m.role === state.activeRole);
+  chip.textContent = (member?.model || 'Auto NIM').split('/').pop();
 }
 
 async function loadAnalytics() {
   try {
-    const res = await fetch('/api/vault/analytics');
+    const res = await api('/api/vault/analytics');
     if (!res.ok) return;
     const { metrics, agentActivity } = await res.json();
     const analyticsEl = document.getElementById('analyticsMetrics');
     if (!analyticsEl) return;
-
     const activity = agentActivity || {};
     analyticsEl.innerHTML = `
-      <div style="font-size:0.8rem; color:var(--text-secondary); line-height: 1.6;">
-        <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
-          <span>System Boot Cycles:</span>
-          <strong style="color:var(--text-primary)">${metrics?.serverStarts ?? 0}</strong>
-        </div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
-          <span>Queries Processed:</span>
-          <strong style="color:var(--text-primary)">${metrics?.chatQueries ?? 0}</strong>
-        </div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
-          <span>Total Vault Events:</span>
-          <strong style="color:var(--text-primary)">${metrics?.totalEvents ?? 0}</strong>
-        </div>
-        <div style="border-top:1px solid rgba(255,255,255,0.05); padding-top:12px;">
-          <div style="margin-bottom:6px; color:var(--text-tertiary); font-size:0.7rem; text-transform:uppercase;">Top Agent Activity</div>
+      <div class="analytics-block">
+        <div class="analytics-row"><span>Boot cycles</span><strong>${metrics?.serverStarts ?? 0}</strong></div>
+        <div class="analytics-row"><span>Queries</span><strong>${metrics?.chatQueries ?? 0}</strong></div>
+        <div class="analytics-row"><span>Vault events</span><strong>${metrics?.totalEvents ?? 0}</strong></div>
+        <div class="analytics-top">
           ${
             Object.keys(activity).length
               ? Object.entries(activity)
                   .sort((a, b) => b[1] - a[1])
                   .slice(0, 3)
-                  .map(
-                    ([agent, count]) => `
-              <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                <span>${escapeHtml(agent)}</span>
-                <strong style="color:var(--accent-cyan)">${count}</strong>
-              </div>`
-                  )
+                  .map(([a, c]) => `<div class="analytics-row"><span>${escapeHtml(a)}</span><strong class="accent">${c}</strong></div>`)
                   .join('')
-              : '<div style="opacity:0.6">No events yet</div>'
+              : '<div class="analytics-empty">No events yet</div>'
           }
         </div>
-      </div>
-    `;
+      </div>`;
   } catch {
-    // silent
+    /* silent */
   }
 }
 
@@ -210,18 +245,16 @@ function renderBoardMembers() {
       (member) => `
     <div class="member-card" data-role="${member.role}">
       <div class="member-card-avatar">
-        <img src="/images/${member.role}.png" alt="Avatar for ${member.role}" onerror="this.src='/images/jarvis.png'" />
+        <img src="/images/${member.role}.png" alt="${member.role}" onerror="this.src='/images/jarvis.png'" />
       </div>
       <div class="member-card-content">
         <h3>${ROLE_NAMES[member.role] || member.role}</h3>
         <p>${escapeHtml(member.description || '')}</p>
         <div class="member-meta">
-          <span class="model-tag">${escapeHtml(member.model || '')}</span>
-          <span class="status-indicator-mini"><span class="status-dot online"></span> Active</span>
+          <span class="model-tag">${escapeHtml((member.provider || '') + ' · ' + (member.model || ''))}</span>
         </div>
       </div>
-    </div>
-  `
+    </div>`
     )
     .join('');
 
@@ -237,66 +270,59 @@ function renderBoardMembers() {
 async function sendMessage() {
   const text = chatInput?.value?.trim();
   if (!text || state.isLoading) return;
-
   if (welcomeScreen) welcomeScreen.style.display = 'none';
 
   appendMessage('user', text);
-
   chatInput.value = '';
   chatInput.style.height = 'auto';
   if (sendBtn) sendBtn.disabled = true;
 
   const typingEl = showTyping();
   state.isLoading = true;
+  setComposerActive(true);
 
   try {
-    const res = await fetch('/api/chat', {
+    const settings = getSettings();
+    const body = {
+      message: text,
+      sessionId: state.sessionId,
+      role: state.activeRole,
+      roleModels: settings.roleModels || {},
+    };
+    if (settings.globalModel && settings.globalProvider) {
+      body.provider = settings.globalProvider;
+      body.model = settings.globalModel;
+    }
+
+    const res = await api('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: text,
-        sessionId: state.sessionId,
-        role: state.activeRole,
-      }),
+      body: JSON.stringify(body),
     });
 
     let data;
     const ct = res.headers.get('content-type') || '';
-    if (ct.includes('application/json')) {
-      data = await res.json();
-    } else {
-      const raw = await res.text();
-      throw new Error(
-        res.ok
-          ? 'Server returned non-JSON (API may not be deployed).'
-          : `HTTP ${res.status}: ${raw.slice(0, 120)}`
-      );
-    }
+    if (ct.includes('application/json')) data = await res.json();
+    else throw new Error('Server returned non-JSON (API may not be deployed).');
 
     removeTyping(typingEl);
-
     if (data.error && !data.response) {
-      appendMessage('assistant', `⚠️ ${data.error}${data.details ? ': ' + data.details : ''}`, {
-        role: 'jarvis',
-        model: 'error',
-      });
+      appendMessage('assistant', `⚠️ ${data.error}`, { role: 'jarvis', model: 'error' });
       return;
     }
-
-    appendMessage('assistant', data.response || 'No response received.', {
+    appendMessage('assistant', data.response || 'No response.', {
       role: data.role || state.activeRole,
       model: data.model,
+      provider: data.provider,
       boardMember: data.boardMember,
     });
+    if (metaModel && data.model) metaModel.textContent = `${data.provider || ''} · ${data.model}`.replace(/^ · /, '');
   } catch (err) {
     removeTyping(typingEl);
-    appendMessage(
-      'assistant',
-      `⚠️ Connection error: ${err.message}. If this is the live site, the API serverless function may not be running — redeploy with the fixed vercel.json.`,
-      { role: 'jarvis', model: 'error' }
-    );
+    appendMessage('assistant', `⚠️ Connection error: ${err.message}`, { role: 'jarvis', model: 'error' });
   } finally {
     state.isLoading = false;
+    setComposerActive(!!chatInput?.value?.trim());
   }
 }
 
@@ -304,7 +330,6 @@ function appendMessage(type, content, meta = {}) {
   if (!messagesEl) return;
   const msgEl = document.createElement('div');
   msgEl.className = `message message--${type}`;
-
   const role = meta.role || state.activeRole;
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -312,13 +337,9 @@ function appendMessage(type, content, meta = {}) {
     msgEl.innerHTML = `
       <div class="msg-avatar msg-avatar--user">YOU</div>
       <div class="msg-body">
-        <div class="msg-header">
-          <span class="msg-name">You</span>
-          <span class="msg-time">${time}</span>
-        </div>
+        <div class="msg-header"><span class="msg-name">You</span><span class="msg-time">${time}</span></div>
         <div class="msg-content">${escapeHtml(content)}</div>
-      </div>
-    `;
+      </div>`;
   } else {
     msgEl.innerHTML = `
       <div class="msg-avatar msg-avatar--${role}">
@@ -328,13 +349,11 @@ function appendMessage(type, content, meta = {}) {
         <div class="msg-header">
           <span class="msg-name">${ROLE_NAMES[role] || role}</span>
           <span class="msg-time">${time}</span>
-          ${meta.model ? `<span class="msg-model">${escapeHtml(meta.model)}</span>` : ''}
+          ${meta.model ? `<span class="msg-model">${escapeHtml((meta.provider ? meta.provider + ' · ' : '') + meta.model)}</span>` : ''}
         </div>
         <div class="msg-content">${renderMarkdown(content)}</div>
-      </div>
-    `;
+      </div>`;
   }
-
   messagesEl.appendChild(msgEl);
   scrollToBottom();
 }
@@ -347,26 +366,19 @@ function showTyping() {
   el.id = 'typing-indicator';
   el.innerHTML = `
     <div class="msg-avatar msg-avatar--${role}">
-      <img src="/images/${role}.png" alt="${ROLE_NAMES[role]}" onerror="this.src='/images/jarvis.png'" />
+      <img src="/images/${role}.png" alt="" onerror="this.src='/images/jarvis.png'" />
     </div>
     <div class="msg-body">
-      <div class="msg-header">
-        <span class="msg-name">${ROLE_NAMES[role]} is thinking...</span>
-      </div>
-      <div class="typing-indicator">
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
-      </div>
-    </div>
-  `;
+      <div class="msg-header"><span class="msg-name">${ROLE_NAMES[role]} is thinking…</span></div>
+      <div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>
+    </div>`;
   messagesEl.appendChild(el);
   scrollToBottom();
   return el;
 }
 
 function removeTyping(el) {
-  if (el && el.parentNode) el.parentNode.removeChild(el);
+  if (el?.parentNode) el.parentNode.removeChild(el);
 }
 
 function scrollToBottom() {
@@ -391,12 +403,8 @@ function renderMarkdown(text) {
   html = html.replace(/\n\n/g, '</p><p>');
   html = '<p>' + html + '</p>';
   html = html.replace(/<p>\s*<\/p>/g, '');
-  html = html.replace(/<p>\s*(<h[1-3]>)/g, '$1');
-  html = html.replace(/(<\/h[1-3]>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<pre>)/g, '$1');
-  html = html.replace(/(<\/pre>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<ul>)/g, '$1');
-  html = html.replace(/(<\/ul>)\s*<\/p>/g, '$1');
+  html = html.replace(/<p>\s*(<(h[1-3]|pre|ul)>)/g, '$1');
+  html = html.replace(/(<\/(h[1-3]|pre|ul)>)\s*<\/p>/g, '$1');
   return html;
 }
 
@@ -405,6 +413,68 @@ function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (c) => map[c]);
 }
 
+// ── Waveform canvas in composer ─────────────────────────────────────────────
+function initWaveform() {
+  const canvas = document.getElementById('composerWave');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let raf = 0;
+  let t = 0;
+
+  function resize() {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(120, rect.width) * dpr;
+    canvas.height = 36 * dpr;
+    canvas.style.width = '100%';
+    canvas.style.height = '36px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function draw() {
+    const w = canvas.clientWidth || 300;
+    const h = 36;
+    ctx.clearRect(0, 0, w, h);
+    const shell = document.getElementById('composerShell');
+    const active = shell?.classList.contains('is-active') || shell?.classList.contains('is-thinking');
+    const thinking = shell?.classList.contains('is-thinking');
+    const bars = 48;
+    const gap = 2;
+    const barW = (w - gap * bars) / bars;
+    for (let i = 0; i < bars; i++) {
+      const phase = t * (thinking ? 0.18 : 0.08) + i * 0.35;
+      const envelope = active ? 0.55 + 0.45 * Math.sin(phase) * Math.sin(phase * 0.4 + t * 0.05) : 0.15 + 0.08 * Math.sin(i + t * 0.02);
+      const bh = Math.max(2, envelope * (h - 8));
+      const x = i * (barW + gap);
+      const y = (h - bh) / 2;
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, thinking ? '#22d3ee' : '#60a5fa');
+      grad.addColorStop(1, thinking ? '#a78bfa' : '#06b6d4');
+      ctx.fillStyle = grad;
+      ctx.globalAlpha = active ? 0.85 : 0.35;
+      ctx.beginPath();
+      const r = Math.min(2, barW / 2);
+      ctx.roundRect?.(x, y, barW, bh, r) || ctx.rect(x, y, barW, bh);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    t += 1;
+    raf = requestAnimationFrame(draw);
+  }
+  draw();
+}
+
 document.addEventListener('DOMContentLoaded', init);
 
-window.__boardroom = { state, appendMessage, showTyping, removeTyping, scrollToBottom };
+window.__boardroom = {
+  state,
+  appendMessage,
+  showTyping,
+  removeTyping,
+  scrollToBottom,
+  reloadStatus: checkSystemStatus,
+  loadBoardMembers,
+  api,
+};
