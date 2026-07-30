@@ -1,56 +1,94 @@
 /**
  * chat.js — Chat API Routes
- * 
- * Handles all communication between the Jarvis frontend and the Board of Directors.
+ * Handles communication between the Jarvis frontend and the Board of Directors.
  */
 
 import { Router } from 'express';
 import { routeToLLM, getBoardMembers, identifyBoardMember } from '../utils/llm_router.js';
 import { logSystemEvent } from '../utils/vault.js';
+import { orchestrateMessage, getTaskStatus, getAllAgents } from '../utils/paperclip_orchestration.js';
 
 const router = Router();
 
-// In-memory conversation history (per-session; production would use a DB)
 const conversations = new Map();
+const taskHistory = new Map();
+
+function demoResponse(role = 'jarvis') {
+  return {
+    response:
+      `I'm **JARVIS**, your Chief of Staff. I'm running in **demo mode** because no working LLM API key is configured.\n\n` +
+      `To activate the full Board of Directors, set one of these in your Vercel / \`.env\` environment:\n` +
+      `\`\`\`\nGEMINI_API_KEY=your-gemini-key\nOPENROUTER_API_KEY=your-openrouter-key\n\`\`\`\n\n` +
+      `Once connected I can route directives to:\n` +
+      `- **The Architect (CEO)** — Strategy & system design\n` +
+      `- **The Coder (CTO)** — Engineering & deployment\n` +
+      `- **The Creative (CMO)** — Design & marketing\n` +
+      `- **The Analyst (CFO)** — Research & data\n` +
+      `- **Product / DevOps / Security / QA** — Full board coverage\n\n` +
+      `UI panels (vault, canvas, mind map, notepad) still work offline.`,
+    model: 'demo-mode',
+    role,
+    boardMember: 'Jarvis — Demo Mode',
+    usage: {},
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function isMissingKeyError(message = '') {
+  return /OPENROUTER_API_KEY|GEMINI_API_KEY|API key|api key|Neither GEMINI/i.test(message);
+}
 
 // ── POST /api/chat ──────────────────────────────────────────────────────────
-// Main chat endpoint. Jarvis receives input, delegates to Board Members.
-
 router.post('/chat', async (req, res) => {
   try {
-    const { message, sessionId = 'default', role = 'jarvis' } = req.body;
+    const { message, sessionId = 'default', role = 'jarvis' } = req.body || {};
 
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    // Get or create conversation history
     if (!conversations.has(sessionId)) {
       conversations.set(sessionId, []);
     }
     const history = conversations.get(sessionId);
 
-    // Add user message to history
+    // Track via Paperclip-compatible task model (in-memory)
+    try {
+      const orchestrationResult = await orchestrateMessage({ message, sessionId, role });
+      if (orchestrationResult?.task) {
+        taskHistory.set(orchestrationResult.task.id, orchestrationResult.task);
+      }
+    } catch (e) {
+      console.warn('[Paperclip] orchestration skipped:', e.message);
+    }
+
     history.push({ role: 'user', content: message });
 
-    // Route to the appropriate board member
+    // No keys at all → instant demo (no external call)
+    if (!process.env.GEMINI_API_KEY && !process.env.OPENROUTER_API_KEY) {
+      const demo = demoResponse(role);
+      history.push({ role: 'assistant', content: demo.response });
+      return res.json(demo);
+    }
+
     const result = await routeToLLM({
       messages: history,
-      role: role,
+      role,
     });
 
-    // Add assistant response to history
     history.push({ role: 'assistant', content: result.content });
 
-    // Keep history manageable (last 50 messages)
     if (history.length > 50) {
-      const systemMsg = history.find(m => m.role === 'system');
+      const systemMsg = history.find((m) => m.role === 'system');
       const recent = history.slice(-48);
       conversations.set(sessionId, systemMsg ? [systemMsg, ...recent] : recent);
     }
 
-    // Log the interaction
-    await logSystemEvent(role, 'CHAT', `User query processed by ${result.boardMember}`);
+    try {
+      await logSystemEvent(role, 'CHAT', `User query processed by ${result.boardMember}`);
+    } catch {
+      // vault is non-critical on serverless
+    }
 
     res.json({
       response: result.content,
@@ -63,34 +101,32 @@ router.post('/chat', async (req, res) => {
   } catch (err) {
     console.error('[CHAT ERROR]', err.message);
 
-    // If OpenRouter key is missing, return a helpful demo response
-    if (err.message.includes('OPENROUTER_API_KEY')) {
-      return res.json({
-        response: `I'm JARVIS, your Chief of Staff. I'm currently running in **demo mode** because the OpenRouter API key hasn't been configured yet.\n\nTo activate the full Board of Directors, add your key to the \`.env\` file:\n\`\`\`\nOPENROUTER_API_KEY=your-key-here\n\`\`\`\n\nGet a key at [openrouter.ai/keys](https://openrouter.ai/keys)\n\nOnce connected, I'll be able to route your directives to:\n- **The Architect (CEO)** — Strategy & system design\n- **The Coder (CTO)** — Engineering & deployment\n- **The Creative (CMO)** — Design & marketing\n- **The Analyst (CFO)** — Research & data`,
-        model: 'demo-mode',
-        role: 'jarvis',
-        boardMember: 'Jarvis — Demo Mode',
-        usage: {},
-        timestamp: new Date().toISOString(),
-      });
+    if (isMissingKeyError(err.message)) {
+      return res.json(demoResponse(req.body?.role || 'jarvis'));
     }
 
-    res.status(500).json({ error: 'Internal server error', details: err.message });
+    // Graceful user-facing error (don't blank the chat)
+    res.json({
+      response: `I hit an error talking to the model provider:\n\n> ${err.message}\n\nCheck your API keys and model names in environment settings, then try again.`,
+      model: 'error',
+      role: req.body?.role || 'jarvis',
+      boardMember: 'Jarvis — Error Recovery',
+      usage: {},
+      timestamp: new Date().toISOString(),
+      error: true,
+    });
   }
 });
 
 // ── POST /api/delegate ──────────────────────────────────────────────────────
-// Jarvis delegates a task to a specific board member
-
 router.post('/delegate', async (req, res) => {
   try {
-    const { task, targetRole } = req.body;
+    const { task, targetRole } = req.body || {};
 
     if (!task) {
       return res.status(400).json({ error: 'Task description is required' });
     }
 
-    // If no target specified, let Jarvis figure out who should handle it
     let role = targetRole;
     let reason = 'Explicitly assigned';
     if (!role) {
@@ -101,7 +137,11 @@ router.post('/delegate', async (req, res) => {
 
     const result = await routeToLLM({ prompt: task, role });
 
-    await logSystemEvent('jarvis', 'DELEGATE', `Task delegated to ${role}: ${task.substring(0, 80)}...`);
+    try {
+      await logSystemEvent('jarvis', 'DELEGATE', `Task delegated to ${role}: ${String(task).substring(0, 80)}...`);
+    } catch {
+      /* ignore */
+    }
 
     res.json({
       response: result.content,
@@ -113,14 +153,19 @@ router.post('/delegate', async (req, res) => {
     });
   } catch (err) {
     console.error('[DELEGATE ERROR]', err.message);
+    if (isMissingKeyError(err.message)) {
+      return res.json({
+        ...demoResponse('jarvis'),
+        delegatedTo: req.body?.targetRole || 'jarvis',
+        reason: 'Demo mode',
+      });
+    }
     res.status(500).json({ error: 'Delegation failed', details: err.message });
   }
 });
 
 // ── GET /api/board ──────────────────────────────────────────────────────────
-// Returns info about all available board members
-
-router.get('/board', (req, res) => {
+router.get('/board', (_req, res) => {
   res.json({
     members: getBoardMembers(),
     timestamp: new Date().toISOString(),
@@ -128,22 +173,54 @@ router.get('/board', (req, res) => {
 });
 
 // ── GET /api/status ─────────────────────────────────────────────────────────
-// System health check
-
-router.get('/status', (req, res) => {
+router.get('/status', (_req, res) => {
   const openRouterConfigured = !!process.env.OPENROUTER_API_KEY;
+  const geminiConfigured = !!process.env.GEMINI_API_KEY;
   res.json({
     status: 'operational',
     platform: 'AI Boardroom',
-    version: '1.0.0',
+    version: '1.1.0',
     openRouterConfigured,
-    // Back-compat for earlier frontend builds
-    apiKeyConfigured: openRouterConfigured,
-    geminiConfigured: !!process.env.GEMINI_API_KEY,
-    voiceEnabled: !!process.env.GEMINI_API_KEY,
+    apiKeyConfigured: openRouterConfigured || geminiConfigured,
+    geminiConfigured,
+    voiceEnabled: geminiConfigured,
     vaultPath: process.env.OBSIDIAN_VAULT_PATH || './obsidian_vault',
     boardMembers: getBoardMembers().length,
     activeSessions: conversations.size,
+    demoMode: !openRouterConfigured && !geminiConfigured,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// ── Paperclip monitoring ────────────────────────────────────────────────────
+router.get('/paperclip/agents', (_req, res) => {
+  res.json({
+    agents: getAllAgents(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+router.get('/paperclip/tasks', (_req, res) => {
+  const tasks = Array.from(taskHistory.values());
+  res.json({
+    tasks,
+    totalTasks: tasks.length,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+router.get('/paperclip/tasks/:taskId', async (req, res) => {
+  const { taskId } = req.params;
+  const task = taskHistory.get(taskId);
+
+  if (!task) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+
+  const status = await getTaskStatus(taskId);
+  res.json({
+    task,
+    status,
     timestamp: new Date().toISOString(),
   });
 });

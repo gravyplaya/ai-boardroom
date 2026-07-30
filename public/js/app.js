@@ -1,11 +1,7 @@
 /**
  * app.js — AI Boardroom Frontend Application
- * 
- * Manages the Jarvis chat interface, board member selection,
- * and communication with the Express backend.
  */
 
-// ── State ───────────────────────────────────────────────────────────────────
 const state = {
   activeRole: 'jarvis',
   sessionId: crypto.randomUUID(),
@@ -14,7 +10,6 @@ const state = {
   boardPanelOpen: false,
 };
 
-// ── Role Display Names ──────────────────────────────────────────────────────
 const ROLE_NAMES = {
   jarvis: 'JARVIS',
   architect: 'The Architect',
@@ -27,19 +22,6 @@ const ROLE_NAMES = {
   qa: 'The QA Lead',
 };
 
-const ROLE_AVATARS = {
-  jarvis: 'J',
-  architect: 'A',
-  coder: 'C',
-  creative: 'M',
-  analyst: 'R',
-  product: 'P',
-  devops: 'D',
-  security: 'S',
-  qa: 'Q',
-};
-
-// ── DOM Elements ────────────────────────────────────────────────────────────
 const $ = (sel) => document.querySelector(sel);
 const messagesEl = $('#messages');
 const chatInput = $('#chatInput');
@@ -56,44 +38,38 @@ const inputRole = $('#inputRole');
 const roleSelector = $('#roleSelector');
 const metaModel = $('#metaModel');
 
-// ── Initialize ──────────────────────────────────────────────────────────────
 function init() {
   setGreeting();
   setupEventListeners();
   checkSystemStatus();
   loadBoardMembers();
   loadAnalytics();
-
-  // Poll analytics to keep them "live"
-  setInterval(loadAnalytics, 5000);
+  setInterval(loadAnalytics, 8000);
 }
 
 function setGreeting() {
+  if (!greetingEl) return;
   const hour = new Date().getHours();
   if (hour < 12) greetingEl.textContent = 'morning';
   else if (hour < 17) greetingEl.textContent = 'afternoon';
   else greetingEl.textContent = 'evening';
 }
 
-// ── Event Listeners ─────────────────────────────────────────────────────────
 function setupEventListeners() {
-  // Send message
-  sendBtn.addEventListener('click', sendMessage);
-  chatInput.addEventListener('keydown', (e) => {
+  sendBtn?.addEventListener('click', sendMessage);
+  chatInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
   });
 
-  // Auto-resize textarea
-  chatInput.addEventListener('input', () => {
+  chatInput?.addEventListener('input', () => {
     chatInput.style.height = 'auto';
     chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
-    sendBtn.disabled = !chatInput.value.trim();
+    if (sendBtn) sendBtn.disabled = !chatInput.value.trim();
   });
 
-  // Quick actions
   document.querySelectorAll('.quick-action').forEach((btn) => {
     btn.addEventListener('click', () => {
       chatInput.value = btn.dataset.prompt;
@@ -102,19 +78,18 @@ function setupEventListeners() {
     });
   });
 
-  // Board panel toggle
-  boardBtn.addEventListener('click', () => {
+  boardBtn?.addEventListener('click', () => {
     state.boardPanelOpen = !state.boardPanelOpen;
-    boardPanel.classList.toggle('open', state.boardPanelOpen);
+    boardPanel?.classList.toggle('open', state.boardPanelOpen);
   });
-  panelClose.addEventListener('click', () => {
+  panelClose?.addEventListener('click', () => {
     state.boardPanelOpen = false;
-    boardPanel.classList.remove('open');
+    boardPanel?.classList.remove('open');
   });
 
-  // Role selector
-  inputRole.addEventListener('click', (e) => {
+  inputRole?.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (!roleSelector) return;
     const rect = inputRole.getBoundingClientRect();
     roleSelector.style.left = rect.left + 'px';
     roleSelector.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
@@ -124,51 +99,59 @@ function setupEventListeners() {
   document.querySelectorAll('.role-option').forEach((opt) => {
     opt.addEventListener('click', () => {
       setActiveRole(opt.dataset.role);
-      roleSelector.hidden = true;
+      if (roleSelector) roleSelector.hidden = true;
     });
   });
 
   document.addEventListener('click', () => {
-    roleSelector.hidden = true;
+    if (roleSelector) roleSelector.hidden = true;
   });
 }
 
-// ── Role Management ─────────────────────────────────────────────────────────
 function setActiveRole(role) {
   state.activeRole = role;
-  inputRole.querySelector('.role-dot').dataset.role = role;
-  inputRole.querySelector('.role-name').textContent = ROLE_NAMES[role];
-  
-  const member = state.boardMembers.find(m => m.role === role);
-  if (member) {
-    metaModel.textContent = member.model;
-  }
+  const dot = inputRole?.querySelector('.role-dot');
+  const name = inputRole?.querySelector('.role-name');
+  if (dot) dot.dataset.role = role;
+  if (name) name.textContent = ROLE_NAMES[role] || role;
+
+  const member = state.boardMembers.find((m) => m.role === role);
+  if (member && metaModel) metaModel.textContent = member.model;
 }
 
-// ── API Communication ───────────────────────────────────────────────────────
 async function checkSystemStatus() {
   try {
     const res = await fetch('/api/status');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    statusDot.classList.add('online');
-    const apiKeyConfigured = (data.openRouterConfigured ?? data.apiKeyConfigured) ? true : false;
-    statusText.textContent = apiKeyConfigured ? 'Online' : 'Demo Mode';
+    statusDot?.classList.add('online');
+    statusDot?.classList.remove('offline');
+    if (data.demoMode) {
+      statusText.textContent = 'Demo Mode';
+    } else if (data.apiKeyConfigured) {
+      statusText.textContent = 'Online';
+    } else {
+      statusText.textContent = 'Online';
+    }
   } catch {
-    statusText.textContent = 'Offline';
+    statusDot?.classList.add('offline');
+    statusDot?.classList.remove('online');
+    if (statusText) statusText.textContent = 'Offline';
   }
 }
 
 async function loadBoardMembers() {
   try {
     const res = await fetch('/api/board');
+    if (!res.ok) throw new Error('board fetch failed');
     const data = await res.json();
-    state.boardMembers = data.members;
+    state.boardMembers = data.members || [];
     renderBoardMembers();
-    
-    const jarvis = data.members.find(m => m.role === 'jarvis');
-    if (jarvis) metaModel.textContent = jarvis.model;
+
+    const jarvis = state.boardMembers.find((m) => m.role === 'jarvis');
+    if (jarvis && metaModel) metaModel.textContent = jarvis.model;
   } catch {
-    // Board info will show when server is running
+    // offline — UI still usable for static welcome
   }
 }
 
@@ -177,89 +160,92 @@ async function loadAnalytics() {
     const res = await fetch('/api/vault/analytics');
     if (!res.ok) return;
     const { metrics, agentActivity } = await res.json();
-    
     const analyticsEl = document.getElementById('analyticsMetrics');
     if (!analyticsEl) return;
 
+    const activity = agentActivity || {};
     analyticsEl.innerHTML = `
       <div style="font-size:0.8rem; color:var(--text-secondary); line-height: 1.6;">
         <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
           <span>System Boot Cycles:</span>
-          <strong style="color:var(--text-primary)">${metrics.serverStarts}</strong>
+          <strong style="color:var(--text-primary)">${metrics?.serverStarts ?? 0}</strong>
         </div>
         <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
           <span>Queries Processed:</span>
-          <strong style="color:var(--text-primary)">${metrics.chatQueries}</strong>
+          <strong style="color:var(--text-primary)">${metrics?.chatQueries ?? 0}</strong>
         </div>
         <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
           <span>Total Vault Events:</span>
-          <strong style="color:var(--text-primary)">${metrics.totalEvents}</strong>
+          <strong style="color:var(--text-primary)">${metrics?.totalEvents ?? 0}</strong>
         </div>
         <div style="border-top:1px solid rgba(255,255,255,0.05); padding-top:12px;">
           <div style="margin-bottom:6px; color:var(--text-tertiary); font-size:0.7rem; text-transform:uppercase;">Top Agent Activity</div>
-          ${Object.entries(agentActivity)
-            .sort((a,b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([agent, count]) => `
+          ${
+            Object.keys(activity).length
+              ? Object.entries(activity)
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 3)
+                  .map(
+                    ([agent, count]) => `
               <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                <span>${agent}</span>
+                <span>${escapeHtml(agent)}</span>
                 <strong style="color:var(--accent-cyan)">${count}</strong>
-              </div>
-            `).join('')}
+              </div>`
+                  )
+                  .join('')
+              : '<div style="opacity:0.6">No events yet</div>'
+          }
         </div>
       </div>
     `;
-  } catch (err) {
-    console.error('Analytics fetch failed', err);
+  } catch {
+    // silent
   }
 }
 
 function renderBoardMembers() {
-  boardMembersEl.innerHTML = state.boardMembers.map((member) => `
+  if (!boardMembersEl) return;
+  boardMembersEl.innerHTML = state.boardMembers
+    .map(
+      (member) => `
     <div class="member-card" data-role="${member.role}">
       <div class="member-card-avatar">
         <img src="/images/${member.role}.png" alt="Avatar for ${member.role}" onerror="this.src='/images/jarvis.png'" />
       </div>
       <div class="member-card-content">
         <h3>${ROLE_NAMES[member.role] || member.role}</h3>
-        <p>${member.description}</p>
+        <p>${escapeHtml(member.description || '')}</p>
         <div class="member-meta">
-          <span class="model-tag">${member.model}</span>
+          <span class="model-tag">${escapeHtml(member.model || '')}</span>
           <span class="status-indicator-mini"><span class="status-dot online"></span> Active</span>
         </div>
       </div>
     </div>
-  `).join('');
+  `
+    )
+    .join('');
 
-  // Click to switch active role
   boardMembersEl.querySelectorAll('.member-card').forEach((card) => {
     card.addEventListener('click', () => {
       setActiveRole(card.dataset.role);
       state.boardPanelOpen = false;
-      boardPanel.classList.remove('open');
+      boardPanel?.classList.remove('open');
     });
   });
 }
 
-// ── Send Message ────────────────────────────────────────────────────────────
 async function sendMessage() {
-  const text = chatInput.value.trim();
+  const text = chatInput?.value?.trim();
   if (!text || state.isLoading) return;
 
-  // Hide welcome screen
-  if (welcomeScreen) {
-    welcomeScreen.style.display = 'none';
-  }
+  if (welcomeScreen) welcomeScreen.style.display = 'none';
 
-  // Add user message
   appendMessage('user', text);
 
-  // Clear input
   chatInput.value = '';
   chatInput.style.height = 'auto';
-  sendBtn.disabled = true;
+  if (sendBtn) sendBtn.disabled = true;
 
-  // Show typing indicator
   const typingEl = showTyping();
   state.isLoading = true;
 
@@ -274,27 +260,48 @@ async function sendMessage() {
       }),
     });
 
-    const data = await res.json();
+    let data;
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      data = await res.json();
+    } else {
+      const raw = await res.text();
+      throw new Error(
+        res.ok
+          ? 'Server returned non-JSON (API may not be deployed).'
+          : `HTTP ${res.status}: ${raw.slice(0, 120)}`
+      );
+    }
+
     removeTyping(typingEl);
 
-    appendMessage('assistant', data.response, {
-      role: data.role,
+    if (data.error && !data.response) {
+      appendMessage('assistant', `⚠️ ${data.error}${data.details ? ': ' + data.details : ''}`, {
+        role: 'jarvis',
+        model: 'error',
+      });
+      return;
+    }
+
+    appendMessage('assistant', data.response || 'No response received.', {
+      role: data.role || state.activeRole,
       model: data.model,
       boardMember: data.boardMember,
     });
   } catch (err) {
     removeTyping(typingEl);
-    appendMessage('assistant', `⚠️ Connection error: ${err.message}. Is the server running?`, {
-      role: 'jarvis',
-      model: 'error',
-    });
+    appendMessage(
+      'assistant',
+      `⚠️ Connection error: ${err.message}. If this is the live site, the API serverless function may not be running — redeploy with the fixed vercel.json.`,
+      { role: 'jarvis', model: 'error' }
+    );
   } finally {
     state.isLoading = false;
   }
 }
 
-// ── Message Rendering ───────────────────────────────────────────────────────
 function appendMessage(type, content, meta = {}) {
+  if (!messagesEl) return;
   const msgEl = document.createElement('div');
   msgEl.className = `message message--${type}`;
 
@@ -315,13 +322,13 @@ function appendMessage(type, content, meta = {}) {
   } else {
     msgEl.innerHTML = `
       <div class="msg-avatar msg-avatar--${role}">
-        <img src="/images/${role}.png" alt="${ROLE_NAMES[role]}" onerror="this.src='/images/jarvis.png'" />
+        <img src="/images/${role}.png" alt="${ROLE_NAMES[role] || role}" onerror="this.src='/images/jarvis.png'" />
       </div>
       <div class="msg-body">
         <div class="msg-header">
           <span class="msg-name">${ROLE_NAMES[role] || role}</span>
           <span class="msg-time">${time}</span>
-          ${meta.model ? `<span class="msg-model">${meta.model}</span>` : ''}
+          ${meta.model ? `<span class="msg-model">${escapeHtml(meta.model)}</span>` : ''}
         </div>
         <div class="msg-content">${renderMarkdown(content)}</div>
       </div>
@@ -333,6 +340,7 @@ function appendMessage(type, content, meta = {}) {
 }
 
 function showTyping() {
+  if (!messagesEl) return null;
   const role = state.activeRole;
   const el = document.createElement('div');
   el.className = 'message message--assistant';
@@ -363,45 +371,25 @@ function removeTyping(el) {
 
 function scrollToBottom() {
   requestAnimationFrame(() => {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
   });
 }
 
-// ── Markdown Rendering (lightweight) ────────────────────────────────────────
 function renderMarkdown(text) {
   if (!text) return '';
-  
   let html = escapeHtml(text);
-
-  // Code blocks
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="lang-$1">$2</code></pre>');
-  
-  // Inline code
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  
-  // Bold
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  
-  // Italic
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  
-  // Links
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  
-  // Headers
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
   html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  
-  // Unordered lists
   html = html.replace(/^[•\-\*] (.+)$/gm, '<li>$1</li>');
   html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-  
-  // Paragraphs
   html = html.replace(/\n\n/g, '</p><p>');
   html = '<p>' + html + '</p>';
-  
-  // Clean up empty paragraphs
   html = html.replace(/<p>\s*<\/p>/g, '');
   html = html.replace(/<p>\s*(<h[1-3]>)/g, '$1');
   html = html.replace(/(<\/h[1-3]>)\s*<\/p>/g, '$1');
@@ -409,18 +397,14 @@ function renderMarkdown(text) {
   html = html.replace(/(<\/pre>)\s*<\/p>/g, '$1');
   html = html.replace(/<p>\s*(<ul>)/g, '$1');
   html = html.replace(/(<\/ul>)\s*<\/p>/g, '$1');
-
   return html;
 }
 
 function escapeHtml(text) {
-  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return text.replace(/[&<>"']/g, (c) => map[c]);
+  const map = { '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' };
+  return String(text).replace(/[&<>"']/g, (c) => map[c]);
 }
 
-// ── Boot ────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);
 
-// ── Upload Integration Hook ─────────────────────────────────────────────────
-// Expose internals for upload.js (ES module) to access
 window.__boardroom = { state, appendMessage, showTyping, removeTyping, scrollToBottom };
