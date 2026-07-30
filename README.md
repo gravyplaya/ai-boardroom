@@ -1,42 +1,35 @@
-# AI Boardroom
+# AI Boardroom v2
 
-Multi-agent corporate simulation platform with **JARVIS** as Chief of Staff — chat, voice, vault memory, canvas, and board of specialized AI agents.
+Multi-agent corporate simulation with **JARVIS** as Chief of Staff.
 
-**Live:** https://ai-boardroom-nine.vercel.app/
+**Primary LLM stack: [NVIDIA NIM](https://build.nvidia.com)** (`https://integrate.api.nvidia.com/v1`)  
+**Fallback:** OpenRouter free models · optional OpenAI / Claude / Gemini / Grok keys
 
 ## Features
-- **JARVIS chat** — routes directives to specialized board members
-- **Voice widget** — Gemini Live API (requires `GEMINI_API_KEY`)
-- **Board of Directors** — Architect, Coder, Creative, Analyst, Product, DevOps, Security, QA
-- **Obsidian vault** — shared markdown memory, notepad, mind map
-- **Implementation canvas** — visual planning board
-- **Demo mode** — UI fully works without API keys (chat explains how to enable models)
+- 9 board members with **per-role model assignment**
+- Settings UI for all provider API keys (stored in browser localStorage)
+- Interactive chat composer with **waveform** (Gemini/Grok-style)
+- Voice: **Gemini Live**, **ChatGPT Realtime**, **Grok Voice**
+- Vault notepad, mind map (search/filter), implementation canvas
+- Demo mode when no keys are set
 
 ## Quick start
-
 ```bash
 npm install
-cp .env.example .env   # add GEMINI_API_KEY and/or OPENROUTER_API_KEY
+cp .env.example .env   # optional server-side keys
 npm start              # http://localhost:8080
 ```
 
-## Environment
+Open **Settings** (gear) → paste **NVIDIA_API_KEY** → Save → chat.
 
-| Variable | Purpose |
-|----------|---------|
-| `GEMINI_API_KEY` | Primary models + voice |
-| `OPENROUTER_API_KEY` | Fallback text models |
-| `BOARDROOM_API_KEY` | Optional lock on `/api/execution/*` |
-| `ALLOWED_ORIGINS` | Optional CORS allowlist (empty = allow all) |
-| `PORT` | Default `8080` |
+## Env (optional server defaults)
+| Key | Purpose |
+|-----|---------|
+| `NVIDIA_API_KEY` | Primary NIM models |
+| `OPENROUTER_API_KEY` | Free-model fallback |
+| `OPENAI_API_KEY` | GPT + ChatGPT voice |
+| `ANTHROPIC_API_KEY` | Claude |
+| `GEMINI_API_KEY` | Gemini + Live voice |
+| `XAI_API_KEY` | Grok + Grok voice |
 
-## Vercel
-
-- Static UI from `public/`
-- Serverless Express via `api/index.js` (rewrites `/api/*`)
-- Set env vars in the Vercel project dashboard
-- After deploy, `/api/status` must return JSON (not HTML)
-
-## Scripts
-- `npm start` — production server
-- `npm run dev` — watch mode
+Client keys in Settings override empty server keys for that browser session.
