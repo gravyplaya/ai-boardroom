@@ -171,7 +171,7 @@
               <span class="meta-model" id="metaModel"></span>
             </div>
             <div class="input-wrapper composer-main">
-              <button class="attach-btn" id="attachBtn" title="Attach files" type="button">
+              <button class="attach-btn" id="attachBtn" title="Attach local files (device only — not Google Drive)" type="button">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
                 </svg>
@@ -278,7 +278,11 @@
   </div>
 
   <!-- Hidden File Input -->
-  <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.txt,.md,.csv,.docx" hidden>
+  <input type="file" id="fileInput" multiple
+    accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.txt,.md,.csv,.docx,image/*,text/plain,application/pdf"
+    hidden
+    data-source="local-device-only"
+    title="Local device files only">
 
   <!-- Voice Mode Floating Widget -->
   <div class="voice-widget" id="voiceWidget" hidden>
@@ -487,19 +491,39 @@
   </div>
 
 
+
+  <!-- Local-only attach sheet -->
+  <div class="attach-sheet" id="attachSheet" hidden>
+    <div class="attach-sheet-panel" role="dialog" aria-labelledby="attachSheetTitle">
+      <div class="attach-sheet-head">
+        <h3 id="attachSheetTitle">Attach files</h3>
+        <button type="button" class="panel-close" id="attachSheetClose" aria-label="Close">&times;</button>
+      </div>
+      <p class="attach-sheet-note">
+        <strong>Local device only.</strong> This app is <em>not</em> connected to Google Drive, Gmail, or any cloud account.
+        If your phone shows Drive in the system picker, that is your OS — we never sign into Google from this button.
+      </p>
+      <button type="button" class="settings-btn settings-btn--primary attach-sheet-cta" id="attachPickLocal">
+        Choose from this device
+      </button>
+      <p class="attach-sheet-hint">Images, PDF, TXT, MD, CSV, DOCX · max 5 files · 20MB each</p>
+    </div>
+  </div>
+
   <!-- Settings Modal -->
   <div class="settings-modal" id="settingsModal" hidden>
     <div class="settings-panel">
       <div class="settings-header">
         <div>
           <h2>Boardroom Settings</h2>
-          <p class="settings-sub">NVIDIA chat · Grok Voice Agent · multi-provider keys</p>
+          <p class="settings-sub">Setup checklist · API keys · connectors (all off by default)</p>
         </div>
         <button class="panel-close" id="settingsClose" type="button">&times;</button>
       </div>
       <div class="settings-body" id="settingsBody"></div>
       <div class="settings-footer">
         <span class="settings-status" id="settingsStatus"></span>
+        <button type="button" class="settings-btn settings-btn--danger" id="settingsDisconnectAll" title="Clear all keys and connectors from this browser">Disconnect all</button>
         <button type="button" class="settings-btn" id="settingsTestNvidia">Test NVIDIA</button>
         <button type="button" class="settings-btn" id="settingsTestVoice">Test Voice</button>
         <button type="button" class="settings-btn settings-btn--primary" id="settingsSave">Save</button>

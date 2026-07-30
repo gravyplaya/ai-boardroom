@@ -3342,3 +3342,185 @@ textarea#chatInput,
 .voice-widget-title {
   letter-spacing: 0.06em;
 }
+
+/* ── Attach sheet (local-only) ──────────────────────────────────────────── */
+.attach-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+}
+.attach-sheet[hidden] { display: none !important; }
+.attach-sheet-panel {
+  width: min(420px, 100%);
+  background: var(--bg-elevated, #141820);
+  border: 1px solid var(--border-default);
+  border-radius: 18px;
+  padding: 18px 16px 16px;
+  box-shadow: var(--shadow-lg);
+}
+.attach-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.attach-sheet-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.attach-sheet-note {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin: 0 0 14px;
+}
+.attach-sheet-cta {
+  width: 100%;
+  min-height: 48px;
+}
+.attach-sheet-hint {
+  margin: 10px 0 0;
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* ── Setup checklist ────────────────────────────────────────────────────── */
+.settings-section--checklist .checklist-progress {
+  height: 6px;
+  border-radius: 99px;
+  background: rgba(255,255,255,0.06);
+  overflow: hidden;
+  margin: 10px 0 6px;
+}
+.checklist-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-cyan), #3b82f6);
+  border-radius: 99px;
+  transition: width 0.3s ease;
+}
+.checklist-meta {
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  margin-bottom: 12px;
+}
+.setup-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.setup-step {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255,255,255,0.02);
+}
+.setup-step.is-done {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.06);
+}
+.setup-step-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: rgba(255,255,255,0.06);
+  color: var(--text-secondary);
+}
+.setup-step.is-done .setup-step-num {
+  background: rgba(16, 185, 129, 0.25);
+  color: #34d399;
+}
+.setup-step-body strong {
+  display: block;
+  font-size: 0.9rem;
+  margin-bottom: 4px;
+}
+.setup-step-body p {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.setup-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.settings-link {
+  color: var(--accent-cyan);
+  font-size: 0.8rem;
+  text-decoration: underline;
+}
+.privacy-banner {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(6, 182, 212, 0.35);
+  background: rgba(6, 182, 212, 0.06);
+}
+.privacy-strong {
+  border-left: 3px solid var(--accent-amber, #f59e0b);
+  padding-left: 10px;
+}
+.settings-guide {
+  font-size: 0.7rem !important;
+  color: var(--text-tertiary) !important;
+  margin-top: 2px !important;
+}
+.settings-btn--danger {
+  border-color: rgba(244, 63, 94, 0.4) !important;
+  color: #fb7185 !important;
+}
+.settings-btn--danger:hover {
+  background: rgba(244, 63, 94, 0.12) !important;
+}
+.settings-btn--sm {
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+}
+.connectors-grid {
+  display: grid;
+  gap: 12px;
+}
+.connector-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 14px;
+  background: rgba(255,255,255,0.02);
+}
+.connector-card.is-off {
+  opacity: 0.92;
+}
+.connector-card.is-on {
+  border-color: rgba(16, 185, 129, 0.35);
+}
+.connector-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.connector-card .settings-btn {
+  margin-top: 10px;
+}
