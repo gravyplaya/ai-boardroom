@@ -1,8 +1,5 @@
 /**
  * vault.js — Obsidian Memory Vault Interface
- * 
- * Read/write interface for the shared Obsidian vault.
- * All agents use this to maintain long-term context across sessions.
  */
 
 import fs from 'fs/promises';
@@ -10,15 +7,20 @@ import path from 'path';
 import dotenv from 'dotenv';
 dotenv.config({ quiet: true });
 
-const VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || './obsidian_vault';
+const VAULT_PATH = path.resolve(process.env.OBSIDIAN_VAULT_PATH || './obsidian_vault');
 
-/**
- * Read a file from the Obsidian vault
- * @param {string} filePath - Relative path within the vault
- * @returns {Promise<string>} File contents
- */
+function safeJoin(relPath) {
+  if (!relPath || typeof relPath !== 'string') throw new Error('Invalid vault path');
+  if (relPath.includes('\0')) throw new Error('Invalid vault path');
+  const full = path.resolve(VAULT_PATH, relPath);
+  if (full !== VAULT_PATH && !full.startsWith(VAULT_PATH + path.sep)) {
+    throw new Error('Path escapes vault');
+  }
+  return full;
+}
+
 export async function readVault(filePath) {
-  const fullPath = path.join(VAULT_PATH, filePath);
+  const fullPath = safeJoin(filePath);
   try {
     return await fs.readFile(fullPath, 'utf-8');
   } catch (err) {
@@ -29,55 +31,44 @@ export async function readVault(filePath) {
   }
 }
 
-/**
- * Write content to the Obsidian vault
- * @param {string} filePath - Relative path within the vault
- * @param {string} content - Content to write
- */
 export async function writeVault(filePath, content) {
-  const fullPath = path.join(VAULT_PATH, filePath);
+  const fullPath = safeJoin(filePath);
   const dir = path.dirname(fullPath);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(fullPath, content, 'utf-8');
 }
 
-/**
- * Append content to a vault file (useful for logs)
- * @param {string} filePath - Relative path within the vault
- * @param {string} content - Content to append
- */
 export async function appendVault(filePath, content) {
-  const fullPath = path.join(VAULT_PATH, filePath);
+  const fullPath = safeJoin(filePath);
+  await fs.mkdir(path.dirname(fullPath), { recursive: true });
   await fs.appendFile(fullPath, '\n' + content, 'utf-8');
 }
 
-/**
- * List all files in the vault (or a subdirectory)
- * @param {string} [subDir=''] - Subdirectory to list
- * @returns {Promise<string[]>} Array of relative file paths
- */
 export async function listVault(subDir = '') {
-  const fullPath = path.join(VAULT_PATH, subDir);
+  const fullPath = subDir ? safeJoin(subDir) : VAULT_PATH;
   try {
+    await fs.mkdir(fullPath, { recursive: true });
     const entries = await fs.readdir(fullPath, { withFileTypes: true, recursive: true });
     return entries
-      .filter(e => e.isFile() && e.name.endsWith('.md'))
-      .map(e => path.join(subDir, e.parentPath ? path.relative(fullPath, path.join(e.parentPath, e.name)) : e.name));
+      .filter((e) => e.isFile() && e.name.endsWith('.md'))
+      .map((e) => {
+        const parent = e.parentPath || e.path || fullPath;
+        return path.join(subDir, path.relative(fullPath, path.join(parent, e.name)));
+      });
   } catch {
     return [];
   }
 }
 
-/**
- * Log a system event to 00_system_logs.md
- * @param {string} agent - Agent role (e.g., 'jarvis', 'architect')
- * @param {string} action - Action type (e.g., 'TASK_ASSIGNED', 'CODE_DEPLOYED')
- * @param {string} description - Human-readable description
- */
 export async function logSystemEvent(agent, action, description) {
-  const timestamp = new Date().toISOString();
-  const entry = `\n[${timestamp}] [${agent.toUpperCase()}] [${action}] — ${description}`;
-  await appendVault('00_system_logs.md', entry);
+  try {
+    const timestamp = new Date().toISOString();
+    const entry = `\n[${timestamp}] [${String(agent).toUpperCase()}] [${action}] — ${description}`;
+    await appendVault('00_system_logs.md', entry);
+  } catch (err) {
+    // Serverless / read-only FS: don't crash the request
+    console.warn('[Vault] logSystemEvent failed:', err.message);
+  }
 }
 
 export default { readVault, writeVault, appendVault, listVault, logSystemEvent };

@@ -1,13 +1,16 @@
 {
   "version": 2,
-  "buildCommand": "npm install",
-  "env": {
-    "NODE_ENV": "production"
-  },
   "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api" },
+    { "source": "/uploads/(.*)", "destination": "/api" },
+    { "source": "/health", "destination": "/api" }
+  ],
+  "headers": [
     {
-      "source": "/(.*)",
-      "destination": "/server.js"
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
     }
   ]
 }

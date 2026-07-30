@@ -1,8 +1,9 @@
 /**
  * server.js — AI Boardroom Express Server
- * 
- * The central nervous system. Serves the Jarvis interface 
- * and routes API calls to the Board of Directors.
+ *
+ * Serves the JARVIS interface and routes API calls to the Board of Directors.
+ * Works both as a long-running Node server (local / preview) and as a
+ * Vercel serverless handler (export default app; no listen on VERCEL).
  */
 
 import express from 'express';
@@ -17,6 +18,9 @@ import toolsRoutes from './routes/tools.js';
 import vaultRoutes from './routes/vault.js';
 import canvasRoutes from './routes/canvas.js';
 import uploadRoutes from './routes/upload.js';
+import executionRoutes from './routes/execution.js';
+import { requireAuth } from './utils/auth.js';
+import { rateLimiter } from './utils/rate_limiter.js';
 import { logSystemEvent } from './utils/vault.js';
 
 dotenv.config({ quiet: true });
@@ -25,66 +29,99 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 8080;
+const IS_VERCEL = process.env.VERCEL === '1' || !!process.env.VERCEL_ENV;
 
-// ── Middleware ───────────────────────────────────────────────────────────────
-app.use(cors());
-app.use(express.json());
-app.use(express.static(join(__dirname, 'public')));
+// ── CORS ────────────────────────────────────────────────────────────────────
+// Empty ALLOWED_ORIGINS = allow all (needed for same-origin + preview).
+// Set ALLOWED_ORIGINS=https://your-domain.com,https://other.com to lock down.
+function buildCorsOrigin() {
+  const raw = (process.env.ALLOWED_ORIGINS || '').trim();
+  if (!raw || raw === '*') return true;
+  const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  return (origin, callback) => {
+    if (!origin || list.includes(origin)) return callback(null, true);
+    return callback(null, false);
+  };
+}
+
+app.use(cors({ origin: buildCorsOrigin(), credentials: true }));
+app.use(rateLimiter);
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// ── Static frontend ─────────────────────────────────────────────────────────
+app.use(express.static(join(__dirname, 'public'), {
+  index: 'index.html',
+  maxAge: IS_VERCEL ? '1h' : 0,
+}));
 
 // ── API Routes ──────────────────────────────────────────────────────────────
+// Public UI APIs (chat, board, status, voice, vault panels, canvas, upload)
 app.use('/api', chatRoutes);
 app.use('/api/voice', voiceRoutes);
-app.use('/api/tools', toolsRoutes);
 app.use('/api/vault', vaultRoutes);
 app.use('/api/canvas', canvasRoutes);
 app.use('/api/upload', uploadRoutes);
 
-// ── Static File Serving ──────────────────────────────────────────────────────
+// Tool bridge is used by the voice widget in-browser — keep open but tools.js is hardened.
+// Code execution sandbox is the highest-risk surface; protect with BOARDROOM_API_KEY when set.
+app.use('/api/tools', toolsRoutes);
+app.use('/api/execution', requireAuth, executionRoutes);
+
 app.use('/uploads', express.static(join(__dirname, 'uploads')));
 
-// ── SPA Fallback ────────────────────────────────────────────────────────────
-app.get('/{*splat}', (req, res) => {
+// ── Health (also at root-level for platform probes) ─────────────────────────
+app.get('/health', (_req, res) => {
+  res.json({ ok: true, service: 'ai-boardroom' });
+});
+
+// API 404
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Not found', path: req.path });
+});
+
+// SPA fallback for non-file routes
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
 
-// ── Start Server ────────────────────────────────────────────────────────────
-app.listen(PORT, async () => {
-  console.log('');
-  console.log('  ╔══════════════════════════════════════════════════╗');
-  console.log('  ║                                                  ║');
-  console.log('  ║          ▄▀▄ █   █▀▄ █▀█ ▄▀▄ █▀▄ █▀▄           ║');
-  console.log('  ║          █▀█ █   █▀▄ █ █ █▀█ █▀▄ █ █           ║');
-  console.log('  ║          ▀ ▀ ▀   ▀▀  ▀▀▀ ▀ ▀ ▀ ▀ ▀▀            ║');
-  console.log('  ║                   R O O M                        ║');
-  console.log('  ║                                                  ║');
-  console.log(`  ║  Server:    http://localhost:${PORT}                ║`);
-  console.log(`  ║  API:       http://localhost:${PORT}/api/status     ║`);
-  console.log(`  ║  API Key:   ${process.env.OPENROUTER_API_KEY ? '✅ Configured' : '⚠️  Not set (demo mode)'}              ║`);
-  console.log(`  ║  Voice:     ${process.env.GEMINI_API_KEY ? '🎙️ Gemini Live Ready' : '⚠️  No GEMINI_API_KEY'}          ║`);
-  console.log('  ║                                                  ║');
-  console.log('  ║  Board Members (9):                              ║');
-  console.log('  ║    ◆ Jarvis    — Chief of Staff                  ║');
-  console.log('  ║    ◆ Architect — CEO / Strategy                  ║');
-  console.log('  ║    ◆ Coder    — CTO / Engineering                ║');
-  console.log('  ║    ◆ Creative — CMO / Design                     ║');
-  console.log('  ║    ◆ Analyst  — CFO / Research                   ║');
-  console.log('  ║    ◆ Product  — CPO / Roadmap                    ║');
-  console.log('  ║    ◆ DevOps   — SRE / Infrastructure             ║');
-  console.log('  ║    ◆ Security — CISO / Hardening                 ║');
-  console.log('  ║    ◆ QA Lead  — CQO / Testing                    ║');
-  console.log('  ║                                                  ║');
-  console.log('  ╚══════════════════════════════════════════════════╝');
-  console.log('');
-
-  try {
-    // Ensure uploads directory exists
-    await mkdir(join(__dirname, 'uploads'), { recursive: true });
-
-    await logSystemEvent('system', 'SERVER_START', `AI Boardroom server started on port ${PORT}`);
-  } catch (e) {
-    // Vault log is non-critical
-  }
+// Error handler (incl. CORS failures)
+app.use((err, _req, res, _next) => {
+  console.error('[ERROR]', err?.message || err);
+  const status = err?.message === 'Not allowed by CORS' ? 403 : 500;
+  res.status(status).json({ error: err?.message || 'Internal server error' });
 });
+
+// ── Local / preview boot (skip on Vercel serverless) ────────────────────────
+async function start() {
+  try {
+    await mkdir(join(__dirname, 'uploads'), { recursive: true });
+    await mkdir(join(__dirname, 'obsidian_vault'), { recursive: true });
+  } catch {
+    // non-fatal
+  }
+
+  if (IS_VERCEL) return;
+
+  app.listen(PORT, '0.0.0.0', async () => {
+    console.log('');
+    console.log('  ╔══════════════════════════════════════════════════╗');
+    console.log('  ║              AI BOARDROOM — JARVIS               ║');
+    console.log(`  ║  Server:  http://0.0.0.0:${PORT}                     ║`);
+    console.log(`  ║  OpenRouter: ${process.env.OPENROUTER_API_KEY ? 'configured' : 'demo mode'}                       ║`);
+    console.log(`  ║  Gemini:     ${process.env.GEMINI_API_KEY ? 'configured' : 'not set'}                       ║`);
+    console.log('  ╚══════════════════════════════════════════════════╝');
+    console.log('');
+    try {
+      await logSystemEvent('system', 'SERVER_START', `AI Boardroom server started on port ${PORT}`);
+    } catch {
+      // vault log is non-critical
+    }
+  });
+}
+
+start();
 
 export default app;

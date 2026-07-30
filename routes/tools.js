@@ -1,64 +1,97 @@
+/**
+ * tools.js — Sandboxed tool bridge for voice / agent actions.
+ * Hardened: path jail + command allowlist (no open shell).
+ */
+
 import { Router } from 'express';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
 const router = Router();
-const execAsync = promisify(exec);
-
-// Security sandbox: Base directory for tool execution is the project root by default.
-// Adjust this path if you want to restrict Jarvis to a specific folder.
+const execFileAsync = promisify(execFile);
 const BASE_WORKSPACE = path.resolve(process.cwd());
-const BLOCKED_WRITE_NAMES = new Set(['.env', '.env.local', '.env.development', '.env.production']);
+
+const ALLOWED_BINARIES = new Set([
+  'ls', 'pwd', 'echo', 'cat', 'head', 'tail', 'wc', 'date',
+  'node', 'npm', 'python3', 'python', 'git',
+]);
 
 function ensureInsideWorkspace(targetPath) {
-  const normalizedBase = BASE_WORKSPACE.endsWith(path.sep) ? BASE_WORKSPACE : BASE_WORKSPACE + path.sep;
-  const normalizedTarget = targetPath.endsWith(path.sep) ? targetPath : targetPath;
-  if (normalizedTarget === BASE_WORKSPACE) return;
-  if (!normalizedTarget.startsWith(normalizedBase)) {
-    throw new Error('Path escapes BASE_WORKSPACE');
+  const resolvedBase = path.resolve(BASE_WORKSPACE);
+  const resolvedTarget = path.resolve(targetPath);
+  if (resolvedTarget !== resolvedBase && !resolvedTarget.startsWith(resolvedBase + path.sep)) {
+    throw new Error('Security Exception: Path escapes workspace');
   }
+  const filename = path.basename(resolvedTarget);
+  if (filename.startsWith('.env') || filename === '.git') {
+    throw new Error(`Security Exception: Access to sensitive path blocked: ${filename}`);
+  }
+  return resolvedTarget;
+}
+
+function parseSafeCommand(command) {
+  if (typeof command !== 'string' || !command.trim()) {
+    throw new Error('Command is required');
+  }
+  if (/[;&|`$<>\\\n\r]/.test(command)) {
+    throw new Error('Security Exception: Shell metacharacters are not allowed');
+  }
+  const parts = command.trim().split(/\s+/);
+  const bin = parts[0];
+  if (!ALLOWED_BINARIES.has(bin)) {
+    throw new Error(`Security Exception: Binary not allowlisted: ${bin}`);
+  }
+  // Keep args relative / non-absolute for file tools
+  for (const arg of parts.slice(1)) {
+    if (arg.startsWith('/') && !arg.startsWith(BASE_WORKSPACE)) {
+      // allow absolute only if inside workspace
+      if (!arg.startsWith(BASE_WORKSPACE)) {
+        // still allow common safe flags like -la
+        if (arg.startsWith('-')) continue;
+        throw new Error('Security Exception: Absolute paths outside workspace blocked');
+      }
+    }
+    if (arg.includes('..')) {
+      throw new Error('Security Exception: Path traversal blocked');
+    }
+  }
+  return parts;
 }
 
 router.post('/execute', async (req, res) => {
-  const { name, args, callId } = req.body;
+  const { name, args, callId } = req.body || {};
 
   if (!name || !args) {
     return res.status(400).json({ error: 'Missing name or args for tool execution' });
   }
 
-  console.log(`[Tool Bridge] Executing tool: ${name}`, args);
+  console.log(`[Tool Bridge] Executing tool: ${name}`);
 
   try {
     let result = null;
 
     if (name === 'execute_cli_command') {
-      const { command } = args;
-      // Note: Executing raw bash from an LLM involves risk.
-      // In a strict production environment, this should run inside a Docker container.
-      const { stdout, stderr } = await execAsync(command, {
+      const parts = parseSafeCommand(args.command);
+      const [bin, ...argv] = parts;
+      const { stdout, stderr } = await execFileAsync(bin, argv, {
         cwd: BASE_WORKSPACE,
-        maxBuffer: 5 * 1024 * 1024, // 5MB
+        timeout: 8000,
+        maxBuffer: 2 * 1024 * 1024,
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG },
       });
       result = { stdout, stderr };
-
     } else if (name === 'read_file') {
       const { filePath } = args;
-      const targetPath = path.resolve(BASE_WORKSPACE, filePath);
-      ensureInsideWorkspace(targetPath);
+      const targetPath = ensureInsideWorkspace(path.resolve(BASE_WORKSPACE, filePath));
       const content = await fs.readFile(targetPath, 'utf-8');
       result = { content };
-
     } else if (name === 'write_file') {
       const { filePath, content } = args;
       if (!filePath || typeof filePath !== 'string') throw new Error('filePath must be a string');
       if (typeof content !== 'string') throw new Error('content must be a string');
-      const targetPath = path.resolve(BASE_WORKSPACE, filePath);
-      ensureInsideWorkspace(targetPath);
-      if (BLOCKED_WRITE_NAMES.has(path.basename(targetPath))) {
-        throw new Error(`Refusing to write to blocked file: ${path.basename(targetPath)}`);
-      }
+      const targetPath = ensureInsideWorkspace(path.resolve(BASE_WORKSPACE, filePath));
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, content, 'utf-8');
       result = { success: true, message: `File written successfully at ${filePath}` };
