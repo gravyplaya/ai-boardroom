@@ -3524,3 +3524,23 @@ textarea#chatInput,
 .connector-card .settings-btn {
   margin-top: 10px;
 }
+
+.attach-sheet-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.attach-sheet-cta--muted {
+  opacity: 0.85;
+  border-style: dashed !important;
+}
+.attach-sheet-warn {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}

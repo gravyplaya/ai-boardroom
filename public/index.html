@@ -278,11 +278,11 @@
   </div>
 
   <!-- Hidden File Input -->
-  <input type="file" id="fileInput" multiple
-    accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.txt,.md,.csv,.docx,image/*,text/plain,application/pdf"
-    hidden
-    data-source="local-device-only"
-    title="Local device files only">
+  <!-- Local pickers only — split so iOS opens Photos, not Files/Drive -->
+  <input type="file" id="fileInputPhotos" accept="image/*" multiple hidden data-source="photos-only" />
+  <input type="file" id="fileInputCamera" accept="image/*" capture="environment" hidden data-source="camera-only" />
+  <input type="file" id="fileInputDocs" accept=".pdf,.txt,.md,.csv,.docx,text/plain,text/markdown,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple hidden data-source="docs-local" />
+  <input type="file" id="fileInput" accept="image/*" multiple hidden data-source="legacy-photos" />
 
   <!-- Voice Mode Floating Widget -->
   <div class="voice-widget" id="voiceWidget" hidden>
@@ -496,17 +496,29 @@
   <div class="attach-sheet" id="attachSheet" hidden>
     <div class="attach-sheet-panel" role="dialog" aria-labelledby="attachSheetTitle">
       <div class="attach-sheet-head">
-        <h3 id="attachSheetTitle">Attach files</h3>
+        <h3 id="attachSheetTitle">Attach from phone</h3>
         <button type="button" class="panel-close" id="attachSheetClose" aria-label="Close">&times;</button>
       </div>
       <p class="attach-sheet-note">
-        <strong>Local device only.</strong> This app is <em>not</em> connected to Google Drive, Gmail, or any cloud account.
-        If your phone shows Drive in the system picker, that is your OS — we never sign into Google from this button.
+        <strong>Not linked to Google Drive.</strong> Use <em>Photo library</em> or <em>Camera</em> —
+        those open Apple Photos / camera only (no Drive folder).
       </p>
-      <button type="button" class="settings-btn settings-btn--primary attach-sheet-cta" id="attachPickLocal">
-        Choose from this device
-      </button>
-      <p class="attach-sheet-hint">Images, PDF, TXT, MD, CSV, DOCX · max 5 files · 20MB each</p>
+      <div class="attach-sheet-actions">
+        <button type="button" class="settings-btn settings-btn--primary attach-sheet-cta" id="attachPickPhotos">
+          Photo library
+        </button>
+        <button type="button" class="settings-btn attach-sheet-cta" id="attachPickCamera">
+          Take photo
+        </button>
+        <button type="button" class="settings-btn attach-sheet-cta attach-sheet-cta--muted" id="attachPickDocs">
+          PDF / text files
+        </button>
+      </div>
+      <p class="attach-sheet-warn" id="attachDocsWarn" hidden>
+        PDF/text opens your phone’s Files app. If Google Drive is installed, iOS may list it as a location —
+        this app still never signs into Drive. Prefer Photo library to avoid that screen.
+      </p>
+      <p class="attach-sheet-hint">Max 5 files · 20MB each · keys stay on your device</p>
     </div>
   </div>
 

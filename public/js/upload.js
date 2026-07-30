@@ -1,7 +1,8 @@
 /**
- * upload.js — Local device file attach only
- * No Google Drive / cloud OAuth. Browser OS may list Drive as a source;
- * we never call Google APIs from this button.
+ * upload.js — Local attach without opening Google Drive by default
+ *
+ * iOS/Android show Drive only when the *document* picker opens (broad accept / PDFs).
+ * Primary actions use image/* or capture → Photo library / Camera (no Drive).
  */
 
 let pendingFiles = [];
@@ -16,55 +17,100 @@ export function initUpload() {
 
 function initUploadDom() {
   const attachBtn = document.getElementById('attachBtn');
-  const fileInput = document.getElementById('fileInput');
   const sheet = document.getElementById('attachSheet');
   const sheetClose = document.getElementById('attachSheetClose');
-  const pickLocal = document.getElementById('attachPickLocal');
+  const pickPhotos = document.getElementById('attachPickPhotos');
+  const pickCamera = document.getElementById('attachPickCamera');
+  const pickDocs = document.getElementById('attachPickDocs');
+  const pickLocal = document.getElementById('attachPickLocal'); // legacy
+  const docsWarn = document.getElementById('attachDocsWarn');
 
-  // Ensure input is a plain local file control
-  if (fileInput) {
-    fileInput.removeAttribute('capture');
-    fileInput.setAttribute('multiple', '');
-    // Prefer non-media capture; keep document types
-    fileInput.setAttribute(
+  const inputPhotos = document.getElementById('fileInputPhotos') || document.getElementById('fileInput');
+  const inputCamera = document.getElementById('fileInputCamera');
+  const inputDocs = document.getElementById('fileInputDocs');
+
+  // Lock photo inputs to images only (critical: never mix PDF accept on photo input)
+  if (inputPhotos) {
+    inputPhotos.setAttribute('accept', 'image/*');
+    inputPhotos.removeAttribute('capture');
+    inputPhotos.multiple = true;
+  }
+  if (inputCamera) {
+    inputCamera.setAttribute('accept', 'image/*');
+    inputCamera.setAttribute('capture', 'environment');
+    inputCamera.multiple = false;
+  }
+  if (inputDocs) {
+    inputDocs.setAttribute(
       'accept',
-      '.jpg,.jpeg,.png,.webp,.gif,.pdf,.txt,.md,.csv,.docx,image/*,text/plain,text/markdown,text/csv,application/pdf'
+      '.pdf,.txt,.md,.csv,.docx,text/plain,text/csv,application/pdf'
     );
-    // Hint browsers this is user files, not cloud picker APIs
-    fileInput.dataset.source = 'local-device-only';
+    inputDocs.removeAttribute('capture');
+    inputDocs.multiple = true;
   }
 
   attachBtn?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    // Show local-only sheet first so user knows nothing cloud-linked opens
+    if (docsWarn) docsWarn.hidden = true;
     if (sheet) {
       sheet.hidden = false;
       return;
     }
-    openLocalPicker();
+    // Fallback: photos only (never docs picker by default)
+    openPicker(inputPhotos);
   });
 
+  pickPhotos?.addEventListener('click', () => {
+    if (sheet) sheet.hidden = true;
+    openPicker(inputPhotos);
+  });
+
+  pickCamera?.addEventListener('click', () => {
+    if (sheet) sheet.hidden = true;
+    openPicker(inputCamera || inputPhotos);
+  });
+
+  pickDocs?.addEventListener('click', () => {
+    // Show warning; require second tap or open with delay so user sees warn
+    if (docsWarn && docsWarn.hidden) {
+      docsWarn.hidden = false;
+      pickDocs.textContent = 'Continue to Files (may list Drive)';
+      return;
+    }
+    if (sheet) sheet.hidden = true;
+    if (pickDocs) pickDocs.textContent = 'PDF / text files';
+    openPicker(inputDocs || inputPhotos);
+  });
+
+  // Legacy single button
   pickLocal?.addEventListener('click', () => {
     if (sheet) sheet.hidden = true;
-    openLocalPicker();
+    openPicker(inputPhotos);
   });
 
   sheetClose?.addEventListener('click', () => {
     if (sheet) sheet.hidden = true;
+    if (docsWarn) docsWarn.hidden = true;
+    if (pickDocs) pickDocs.textContent = 'PDF / text files';
   });
 
   sheet?.addEventListener('click', (e) => {
-    if (e.target === sheet) sheet.hidden = true;
+    if (e.target === sheet) {
+      sheet.hidden = true;
+      if (docsWarn) docsWarn.hidden = true;
+      if (pickDocs) pickDocs.textContent = 'PDF / text files';
+    }
   });
 
-  fileInput?.addEventListener('change', (e) => {
-    Array.from(e.target.files || []).forEach(addFile);
-    e.target.value = '';
+  [inputPhotos, inputCamera, inputDocs].forEach((input) => {
+    input?.addEventListener('change', (e) => {
+      Array.from(e.target.files || []).forEach(addFile);
+      e.target.value = '';
+    });
   });
 
-  const fileChips = document.getElementById('fileChips');
-  fileChips?.addEventListener('click', (e) => {
+  document.getElementById('fileChips')?.addEventListener('click', (e) => {
     const btn = e.target.closest('.file-chip-remove');
     if (btn) removeFile(parseInt(btn.dataset.index, 10));
   });
@@ -83,15 +129,33 @@ function initUploadDom() {
     });
   }
 
+  // Paste images from clipboard (desktop / some mobile)
+  document.getElementById('chatInput')?.addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const f = item.getAsFile();
+        if (f) addFile(f);
+      }
+    }
+  });
+
   document.getElementById('sendBtn')?.addEventListener('click', handleSendWithFiles, true);
 }
 
-function openLocalPicker() {
-  const fileInput = document.getElementById('fileInput');
-  if (!fileInput) return;
-  // Fresh input click — never open gapi / Drive picker
+function openPicker(input) {
+  if (!input) {
+    alert('File picker unavailable. Refresh the page.');
+    return;
+  }
   try {
-    fileInput.click();
+    // Ensure we don't accidentally leave capture on photo library input
+    if (input.id === 'fileInputPhotos' || input.id === 'fileInput') {
+      input.removeAttribute('capture');
+      input.setAttribute('accept', 'image/*');
+    }
+    input.click();
   } catch (err) {
     console.warn('[Upload] picker', err);
   }
@@ -130,9 +194,7 @@ async function sendWithFiles(textMessage) {
   formData.append('sessionId', state.sessionId);
   if (textMessage) formData.append('message', textMessage);
 
-  // Attach provider keys header if available (multipart can't use custom easily via FormData+headers)
   const extraHeaders = window.__boardroomSettings?.getProviderKeysHeader?.() || {};
-
   const typingEl = showTyping?.();
   if (state) state.isLoading = true;
 
@@ -174,13 +236,19 @@ function addFile(file) {
     'image/png',
     'image/webp',
     'image/gif',
+    'image/heic',
+    'image/heif',
     'application/pdf',
     'text/plain',
     'text/markdown',
     'text/csv',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   ];
-  if (!ALLOWED.includes(file.type) && !file.name.endsWith('.md')) {
+  const okType =
+    ALLOWED.includes(file.type) ||
+    file.type.startsWith('image/') ||
+    /\.(md|txt|csv|pdf|docx|jpe?g|png|webp|gif|heic)$/i.test(file.name);
+  if (!okType) {
     alert(`Unsupported file type: ${file.name}`);
     return;
   }
