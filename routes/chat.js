@@ -309,7 +309,7 @@ router.get('/status', (req, res) => {
   res.json({
     status: 'operational',
     platform: 'AI Boardroom',
-    version: '2.1.0',
+    version: '2.2.0',
     primaryProvider: 'nvidia',
     providers: providerStatus,
     nvidiaConfigured: providerStatus.nvidia,
@@ -318,6 +318,7 @@ router.get('/status', (req, res) => {
     authRequired: authEnabled(),
     features: {
       streaming: true,
+      boardSession: true,
       voice: true,
       vault: true,
       canvas: true,

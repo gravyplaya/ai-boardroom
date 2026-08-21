@@ -91,13 +91,13 @@ function buildMessages({ prompt, messages, systemPrompt }) {
   ];
 }
 
-async function callOpenAICompatible({ baseUrl, apiKey, model, messages, temperature, extraHeaders = {} }) {
+async function callOpenAICompatible({ baseUrl, apiKey, model, messages, temperature, extraHeaders = {}, maxTokens }) {
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   const body = {
     model,
     messages,
     temperature: temperature ?? 0.7,
-    max_tokens: Number(env('LLM_MAX_TOKENS', '2048')),
+    max_tokens: Number(maxTokens ?? env('LLM_MAX_TOKENS', '2048')),
     stream: false,
   };
 
@@ -130,7 +130,7 @@ async function callOpenAICompatible({ baseUrl, apiKey, model, messages, temperat
   };
 }
 
-async function callAnthropic({ apiKey, model, messages, temperature }) {
+async function callAnthropic({ apiKey, model, messages, temperature, maxTokens }) {
   const system = messages.find((m) => m.role === 'system')?.content || '';
   const anthropicMessages = messages
     .filter((m) => m.role !== 'system')
@@ -145,7 +145,7 @@ async function callAnthropic({ apiKey, model, messages, temperature }) {
     },
     body: JSON.stringify({
       model,
-      max_tokens: Number(env('LLM_MAX_TOKENS', '2048')),
+      max_tokens: Number(maxTokens ?? env('LLM_MAX_TOKENS', '2048')),
       temperature: temperature ?? 0.7,
       system,
       messages: anthropicMessages,
@@ -205,7 +205,7 @@ export function buildAttemptPlan({ role = 'jarvis', provider, model, roleModels 
   return attempts;
 }
 
-async function runAttempt({ provider, model, messages, temperature, clientKeys }) {
+async function runAttempt({ provider, model, messages, temperature, clientKeys, maxTokens }) {
   const apiKey = resolveKey(provider, clientKeys);
   if (!apiKey) throw new Error(`No API key for provider ${provider}`);
 
@@ -213,7 +213,7 @@ async function runAttempt({ provider, model, messages, temperature, clientKeys }
   if (!p) throw new Error(`Unknown provider ${provider}`);
 
   if (provider === 'anthropic') {
-    return callAnthropic({ apiKey, model, messages, temperature });
+    return callAnthropic({ apiKey, model, messages, temperature, maxTokens });
   }
 
   const extraHeaders = {};
@@ -229,6 +229,7 @@ async function runAttempt({ provider, model, messages, temperature, clientKeys }
     messages,
     temperature,
     extraHeaders,
+    maxTokens,
   });
 }
 
@@ -244,6 +245,7 @@ export async function routeToLLM({
   temperature = null,
   clientKeys = {},
   roleModels = {},
+  maxTokens = null,
 }) {
   const persona = BOARD_PERSONAS[role];
   if (!persona) {
@@ -272,6 +274,7 @@ export async function routeToLLM({
         messages: requestMessages,
         temperature: temperature ?? persona.temperature,
         clientKeys,
+        maxTokens,
       });
       return {
         content: result.content,
@@ -327,7 +330,7 @@ Respond with ONLY JSON: {"role":"role_key","reason":"why"}`,
 
 
 /** Stream OpenAI-compatible chat completions; yields text deltas. */
-async function* streamOpenAICompatible({ baseUrl, apiKey, model, messages, temperature, extraHeaders = {} }) {
+async function* streamOpenAICompatible({ baseUrl, apiKey, model, messages, temperature, extraHeaders = {}, maxTokens }) {
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   const res = await fetch(url, {
     method: 'POST',
@@ -340,7 +343,7 @@ async function* streamOpenAICompatible({ baseUrl, apiKey, model, messages, tempe
       model,
       messages,
       temperature: temperature ?? 0.7,
-      max_tokens: Number(env('LLM_MAX_TOKENS', '2048')),
+      max_tokens: Number(maxTokens ?? env('LLM_MAX_TOKENS', '2048')),
       stream: true,
     }),
   });
@@ -414,6 +417,7 @@ export async function* streamRouteToLLM(opts) {
     temperature = null,
     clientKeys = {},
     roleModels = {},
+    maxTokens = null,
   } = opts;
 
   const persona = BOARD_PERSONAS[role];
@@ -441,6 +445,7 @@ export async function* streamRouteToLLM(opts) {
           messages: requestMessages,
           temperature: temperature ?? persona.temperature,
           clientKeys,
+          maxTokens,
         });
         yield {
           type: 'meta',
@@ -486,6 +491,7 @@ export async function* streamRouteToLLM(opts) {
         messages: requestMessages,
         temperature: temperature ?? persona.temperature,
         extraHeaders,
+        maxTokens,
       })) {
         full += part.delta;
         yield { type: 'delta', delta: part.delta, model: part.model };
@@ -501,6 +507,23 @@ export async function* streamRouteToLLM(opts) {
   throw new Error(`All stream providers failed.\n${errors.slice(0, 6).join('\n')}`);
 }
 
+/** Consume a stream and optionally forward deltas. */
+export async function collectStream(opts, onDelta) {
+  let full = '';
+  let meta = { role: opts.role };
+  for await (const ev of streamRouteToLLM(opts)) {
+    if (ev.type === 'meta') meta = { ...meta, ...ev };
+    else if (ev.type === 'delta' && ev.delta) {
+      full += ev.delta;
+      onDelta?.(ev.delta, meta);
+    } else if (ev.type === 'done') {
+      full = ev.content || full;
+      meta = { ...meta, ...ev };
+    }
+  }
+  return { ...meta, content: full };
+}
+
 export { BOARD_PERSONAS as BOARD_MODELS };
-export default { routeToLLM, streamRouteToLLM, getBoardMembers, identifyBoardMember };
+export default { routeToLLM, streamRouteToLLM, collectStream, getBoardMembers, identifyBoardMember };
 

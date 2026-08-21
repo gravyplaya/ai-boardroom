@@ -12,6 +12,7 @@ const state = {
   abortController: null,
   lastUserMessage: null,
   lastAssistantEl: null,
+  mode: 'board',
 };
 
 const ROLE_NAMES = {
@@ -211,6 +212,9 @@ function setupEventListeners() {
       setTimeout(() => (btn.textContent = 'Copy'), 1200);
     }
   });
+
+  document.getElementById('modeBoard')?.addEventListener('click', () => setMode('board'));
+  document.getElementById('modeDirect')?.addEventListener('click', () => setMode('direct'));
 }
 
 function toggleRoleSelector() {
@@ -250,6 +254,20 @@ function updateSendButton() {
   }
 }
 
+function setMode(mode) {
+  state.mode = mode === 'direct' ? 'direct' : 'board';
+  const board = document.getElementById('modeBoard');
+  const direct = document.getElementById('modeDirect');
+  board?.classList.toggle('is-on', state.mode === 'board');
+  direct?.classList.toggle('is-on', state.mode === 'direct');
+  board?.setAttribute('aria-pressed', state.mode === 'board' ? 'true' : 'false');
+  direct?.setAttribute('aria-pressed', state.mode === 'direct' ? 'true' : 'false');
+  const ta = document.getElementById('chatInput');
+  if (ta) {
+    ta.placeholder = state.mode === 'board' ? 'Directive for the Board…' : 'Message this seat…';
+  }
+}
+
 function setComposerActive(on) {
   document.getElementById('composerShell')?.classList.toggle('is-active', on);
   document.getElementById('composerShell')?.classList.toggle('is-thinking', state.isLoading);
@@ -266,6 +284,8 @@ function setActiveRole(role) {
     metaModel.textContent = `${member.provider || ''} · ${member.model || ''}`.replace(/^ · /, '');
   }
   updateModelChip();
+  if (role !== 'jarvis') setMode('direct');
+  else setMode('board');
 }
 
 async function checkSystemStatus() {
@@ -409,7 +429,7 @@ async function sendMessage(forcedText, opts = {}) {
       chatInput.style.height = 'auto';
     }
   } else {
-    // remove last assistant if regenerating
+    messagesEl?.querySelector('.session-card:last-of-type')?.remove();
     const last = messagesEl?.querySelector('.message--assistant:last-of-type');
     last?.remove();
   }
@@ -417,10 +437,33 @@ async function sendMessage(forcedText, opts = {}) {
   state.isLoading = true;
   setComposerActive(true);
   updateSendButton();
-  announce('Generating response');
-
-  const streamEl = beginAssistantStream();
   state.abortController = new AbortController();
+
+  if (state.mode === 'board' && window.__boardSession?.runBoardSession) {
+    announce('Convening the board');
+    try {
+      await window.__boardSession.runBoardSession({
+        message: text,
+        api,
+        signal: state.abortController.signal,
+        onStatus: announce,
+      });
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        appendMessage('assistant', `Board session error: ${err.message}`, { role: 'jarvis', model: 'error' });
+      }
+    } finally {
+      state.isLoading = false;
+      state.abortController = null;
+      setComposerActive(!!chatInput?.value?.trim());
+      updateSendButton();
+      announce('Session closed');
+    }
+    return;
+  }
+
+  announce('Generating response');
+  const streamEl = beginAssistantStream();
 
   try {
     const settings = getSettings();

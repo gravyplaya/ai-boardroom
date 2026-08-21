@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { mkdir } from 'fs/promises';
 import chatRoutes from './routes/chat.js';
+import sessionRoutes from './routes/session.js';
 import voiceRoutes from './routes/voice.js';
 import toolsRoutes from './routes/tools.js';
 import vaultRoutes from './routes/vault.js';
@@ -76,6 +77,7 @@ app.use(
 );
 
 app.use('/api', chatRoutes);
+app.use('/api', sessionRoutes);
 app.use('/api/voice', voiceRoutes);
 app.use('/api/vault', vaultRoutes);
 app.use('/api/canvas', canvasRoutes);
@@ -89,7 +91,7 @@ app.use('/api/execution', requireAuth, executionRoutes);
 app.use('/uploads', express.static(join(__dirname, 'uploads'), { index: false, fallthrough: true }));
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'ai-boardroom', version: '2.1.0' });
+  res.json({ ok: true, service: 'ai-boardroom', version: '2.2.0' });
 });
 
 app.use('/api', (req, res) => {

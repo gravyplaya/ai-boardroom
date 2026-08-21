@@ -42,7 +42,7 @@
           </div>
           <div class="logo-text">
             <span class="logo-title">AI BOARDROOM</span>
-            <span class="logo-subtitle">Production Agent Platform</span>
+            <span class="logo-subtitle">A directive in, a company out</span>
           </div>
         </div>
       </div>
@@ -129,24 +129,20 @@
               <div class="orb-ring orb-ring--3"></div>
               <div class="orb-core"></div>
             </div>
-            <h1>Good <span id="greeting"></span>, Sir.</h1>
-            <p class="welcome-sub">JARVIS online. NVIDIA NIM primary · multi-provider ready. Open Settings to add keys.</p>
+            <h1>Give the board a directive.</h1>
+            <p class="welcome-sub">JARVIS briefs the seats. They deliberate in parallel. You get a Decision Packet — and minutes in the vault.</p>
             <div class="quick-actions">
-              <button class="quick-action" data-prompt="Give me a status report on the system">
-                <span class="qa-icon">📊</span>
-                <span>System Status</span>
+              <button class="quick-action" data-prompt="Ship an MVP for a local-services AI receptionist in 14 days. Constraints: Vercel, NVIDIA primary, one engineer.">
+                <span>Ship an MVP</span>
               </button>
-              <button class="quick-action" data-prompt="Who is on the Board of Directors and what are their capabilities?">
-                <span class="qa-icon">👥</span>
-                <span>Meet the Board</span>
+              <button class="quick-action" data-prompt="Audit this boardroom product: what must be true before we call it a company OS, not a chat demo?">
+                <span>Product audit</span>
               </button>
-              <button class="quick-action" data-prompt="Generate an MVP for a new SaaS application">
-                <span class="qa-icon">🚀</span>
-                <span>Build an MVP</span>
+              <button class="quick-action" data-prompt="Design the architecture for persistent company memory (sessions, decisions, GitHub) without boiling the ocean.">
+                <span>Memory architecture</span>
               </button>
-              <button class="quick-action" data-prompt="Analyze the current market for AI developer tools">
-                <span class="qa-icon">🔍</span>
-                <span>Market Research</span>
+              <button class="quick-action" data-prompt="Go-to-market for an AI boardroom sold to agencies. Who buys, what they pay, what we refuse.">
+                <span>Go to market</span>
               </button>
             </div>
           </div>
@@ -160,6 +156,10 @@
               <canvas id="composerWave" class="composer-wave"></canvas>
             </div>
             <div class="composer-top">
+              <div class="mode-seg" role="group" aria-label="Reply mode">
+                <button type="button" class="mode-seg-btn is-on" id="modeBoard" aria-pressed="true">Board</button>
+                <button type="button" class="mode-seg-btn" id="modeDirect" aria-pressed="false">Direct</button>
+              </div>
               <button type="button" class="input-role" id="inputRole" title="Change active agent" aria-haspopup="listbox" aria-expanded="false" role="button">
                 <span class="role-dot" data-role="jarvis"></span>
                 <span class="role-name">JARVIS</span>
@@ -194,7 +194,7 @@
               </button>
             </div>
             <div class="input-meta composer-meta">
-              <span class="meta-hint"><kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline · NVIDIA primary</span>
+              <span class="meta-hint"><kbd>Enter</kbd> send · Board session default · Direct for one seat</span>
             </div>
           </div>
         </div>
@@ -545,6 +545,7 @@
   </div>
 
   <script src="/js/settings.js"></script>
+  <script src="/js/session.js"></script>
   <script src="/js/app.js"></script>
   <script src="/js/voice.js"></script>
   <script type="module">
